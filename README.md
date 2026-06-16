@@ -49,10 +49,13 @@ cd new_agent
 pip install -e .
 ```
 
-### Step 4: Install RAG Dependencies
+### Step 4: Install RAG Dependencies (Pi2 Optimized)
+
+**Note**: For Raspberry Pi 2 (1GB RAM), use SQLite backend for `chromadb` to avoid gRPC dependency.
 
 ```bash
 pip install chromadb sentence-transformers pypdf beautifulsoup4
+export CHROMA_DB_MODE="sqlite"  # Force SQLite backend on Pi2
 ```
 
 ### Step 5: Configure Hermes
