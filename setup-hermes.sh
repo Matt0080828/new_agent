@@ -232,17 +232,16 @@ if is_termux; then
     fi
     echo -e "${GREEN}✓${NC} Dependencies installed"
 elif is_raspberry_pi2; then
-    # Pi2: install core deps only (no web/cli extras to save space)
+    # Pi2: install base deps only (no extras to avoid uvloop/ffmpeg issues)
     echo -e "${CYAN}→${NC} Raspberry Pi 2 detected — installing minimal CLI bundle"
-    echo -e "${CYAN}→${NC} (Skipping heavy extras: web, cli, tty for ARMv7)"
+    echo -e "${CYAN}→${NC} (Skipping extras: web, cli, tty for ARMv7 compatibility)"
     "$SETUP_PYTHON" -m pip install --upgrade pip setuptools wheel
-    # Install only core + memory deps for Pi2
-    "$SETUP_PYTHON" -m pip install -e ".[honcho]" || \
+    # Install base package without extras (avoids uvloop from web)
     "$SETUP_PYTHON" -m pip install -e "." || {
         echo -e "${RED}✗${NC} Pi2 dependency installation failed"
         exit 1
     }
-    # Install RAG deps with SQLite backend
+    # Install RAG deps with SQLite backend (skip torch with CUDA)
     echo -e "${CYAN}→${NC} Installing RAG dependencies (SQLite backend for Pi2)..."
     "$SETUP_PYTHON" -m pip install chromadb sentence-transformers pypdf beautifulsoup4
     export CHROMA_DB_MODE="sqlite"  # Force SQLite backend on Pi2
