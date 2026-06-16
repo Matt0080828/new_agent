@@ -96,30 +96,37 @@ EOF
 
 ## Model Setup Options
 
-### Option A: lm-studio (Recommended)
+### Option A: lm-studio (Recommended for Pi2)
 
-1. **Download lm-studio for Linux**
+**Architecture**: Run lm-studio on a powerful machine (x86_64), connect to it from Pi2.
+
+**Setup**:
+
+1. **On x86_64 machine (hosting model)**:
    ```bash
-   wget https://github.com/lmstudio-ai/lmstudio/releases/download/v0.4.0/lmstudio_0.4.0_amd64.deb
-   sudo dpkg -i lmstudio_0.4.0_amd64.deb
+   # Download lm-studio for Linux (or Windows/Mac)
+   # Launch lm-studio → Load model → Start Server
+   # Default port: 1234
    ```
 
-2. **Launch lm-studio** → Load model → Start Server (port 1234)
-
-3. **Update config.yaml**:
+2. **On Raspberry Pi 2 (client)**:
+   - Find the x86_64 machine IP (e.g., `192.168.1.100`)
+   - Update config.yaml:
    ```yaml
    models:
      - name: "custom:qwen2.5-7b"
-       base_url: "http://localhost:1234/v1"
+       base_url: "http://192.168.1.100:1234/v1"
    
    providers:
      - name: "custom"
-       base_url: "http://localhost:1234/v1"
+       base_url: "http://192.168.1.100:1234/v1"
    ```
 
-### Option B: llama.cpp (Advanced)
+### Option B: llama.cpp (Advanced - for x86_64 only)
 
-1. **Compile llama.cpp** (takes ~15-30 minutes on Pi2)
+**Note**: llama.cpp compilation on Pi2 is extremely slow (~1-2 hours). Recommended to run on x86_64 and connect remotely.
+
+1. **Compile llama.cpp** (on x86_64 machine):
    ```bash
    git clone https://github.com/ggerganov/llama.cpp.git
    cd llama.cpp
