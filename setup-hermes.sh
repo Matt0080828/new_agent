@@ -39,6 +39,21 @@ is_termux() {
     [ -n "${TERMUX_VERSION:-}" ] || [[ "${PREFIX:-}" == *"com.termux/files/usr"* ]]
 }
 
+is_raspberry_pi2() {
+    # Detect Raspberry Pi 2 (ARMv7 32-bit)
+    # Check /proc/cpuinfo for Hardware line and /proc/model for revision
+    if grep -q "Raspberry Pi 2" /proc/cpuinfo 2>/dev/null; then
+        return 0
+    fi
+    # Fallback: check ARMv7 + 1GB RAM
+    if [ "$(uname -m)" == "armv7l" ] && [ -f /proc/meminfo ]; then
+        local mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+        local mem_mb=$((mem_kb / 1024))
+        [ "$mem_mb" -le 1024 ] && [ "$mem_mb" -ge 900 ] && return 0
+    fi
+    return 1
+}
+
 get_command_link_dir() {
     if is_termux && [ -n "${PREFIX:-}" ]; then
         echo "$PREFIX/bin"
@@ -176,6 +191,19 @@ fi
 if is_termux; then
     "$PYTHON_PATH" -m venv venv
     echo -e "${GREEN}✓${NC} venv created with stdlib venv"
+elif is_raspberry_pi2; then
+    # Pi2: use Python 3.10 (32-bit compatible) with stdlib venv
+    PYTHON_VERSION="3.10"
+    if command -v python3.10 >/dev/null 2>&1; then
+        PYTHON_PATH=$(command -v python3.10)
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_PATH=$(command -v python3)
+    else
+        echo -e "${RED}✗${NC} Python 3.10+ required for Pi2"
+        exit 1
+    fi
+    "$PYTHON_PATH" -m venv venv
+    echo -e "${GREEN}✓${NC} venv created (Python 3.10 for Pi2 ARMv7)"
 else
     $UV_CMD venv venv --python "$PYTHON_VERSION"
     echo -e "${GREEN}✓${NC} venv created (Python $PYTHON_VERSION)"
@@ -203,6 +231,22 @@ if is_termux; then
         "$SETUP_PYTHON" -m pip install -e ".[termux]" || "$SETUP_PYTHON" -m pip install -e "."
     fi
     echo -e "${GREEN}✓${NC} Dependencies installed"
+elif is_raspberry_pi2; then
+    # Pi2: install core deps only (no web/cli extras to save space)
+    echo -e "${CYAN}→${NC} Raspberry Pi 2 detected — installing minimal CLI bundle"
+    echo -e "${CYAN}→${NC} (Skipping heavy extras: web, cli, tty for ARMv7)"
+    "$SETUP_PYTHON" -m pip install --upgrade pip setuptools wheel
+    # Install only core + memory deps for Pi2
+    "$SETUP_PYTHON" -m pip install -e ".[honcho]" || \
+    "$SETUP_PYTHON" -m pip install -e "." || {
+        echo -e "${RED}✗${NC} Pi2 dependency installation failed"
+        exit 1
+    }
+    # Install RAG deps with SQLite backend
+    echo -e "${CYAN}→${NC} Installing RAG dependencies (SQLite backend for Pi2)..."
+    "$SETUP_PYTHON" -m pip install chromadb sentence-transformers pypdf beautifulsoup4
+    export CHROMA_DB_MODE="sqlite"  # Force SQLite backend on Pi2
+    echo -e "${GREEN}✓${NC} Dependencies installed (Pi2 minimal + RAG)"
 else
     # Prefer uv sync with lockfile (hash-verified installs) when available,
     # fall back to pip install for compatibility or when lockfile is stale.
