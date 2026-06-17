@@ -214,7 +214,7 @@ huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF \
 ## Repository
 
 - **GitHub**: https://github.com/Matt0080828/new_agent
-- **Tags**: `v0.6-pi2` (latest)
+|- **Tags**: `v0.7-pi2` (latest) |
 
 ## Notes
 
