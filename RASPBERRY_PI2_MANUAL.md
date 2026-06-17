@@ -46,7 +46,7 @@ pip install --upgrade pip
 ### 3. 安裝 Hermes Agent 依賴
 
 ```bash
-pip install chromadb sentence-transformers pypdf beautifulsoup4
+pip install honcho-ai sentence-transformers pypdf beautifulsoup4
 ```
 
 ---
@@ -266,12 +266,12 @@ make -j2 LLAMA_AVX2=OFF LLAMA_AVX=OFF  # 僅使用 2 個核心
 ./server -m ~/qwen2.5-1.5b-instruct-q4_k_m.gguf -c 1024 --port 8080
 ```
 
-### Q3: hermes 启动时显示 no module named 'chromadb'？
+### Q3: hermes 启动时显示 no module named .honcho-ai.？
 
 **解決方案：**
 ```bash
 source ~/.hermes-venv/bin/activate
-pip install chromadb sentence-transformers pypdf beautifulsoup4
+pip install honcho-ai sentence-transformers pypdf beautifulsoup4
 ```
 
 ### Q4: 如何設定記憶體限制？
@@ -388,7 +388,7 @@ pip install -e .
 
 # Step 5: Install RAG dependencies
 echo "Step 5: Installing RAG dependencies..."
-pip install chromadb sentence-transformers pypdf beautifulsoup4
+pip install honcho-ai sentence-transformers pypdf beautifulsoup4
 
 # Step 6: Setup config
 echo "Step 6: Creating config..."

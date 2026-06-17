@@ -5,7 +5,7 @@ This fork adds support for Raspberry Pi 2 (32-bit ARM).
 ## Key Changes
 
 - **llama.cpp**: Compiled with NEON support, disabled AVX/AVX2
-- **ChromaDB**: Uses SQLite backend (no GDAL dependency)
+- **sqlite-vec**: SQLite vector extension for RAG
 - **RAG**: Uses `all-MiniLM-L6-v2` (ARM-optimized)
 - **Model**: Qwen2.5-7B (GGUF q4_k_m, ~4.6GB)
 
@@ -21,7 +21,7 @@ source ~/.hermes-venv/bin/activate
 
 # Install deps
 pip install --upgrade pip
-pip install chromadb sentence-transformers pypdf beautifulsoup4
+pip install honcho-ai sentence-transformers pypdf beautifulsoup4
 
 # Build llama.cpp for ARMv7
 git clone https://github.com/ggerganov/llama.cpp.git
