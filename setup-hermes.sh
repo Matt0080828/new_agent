@@ -240,17 +240,13 @@ elif is_raspberry_pi2; then
     # Force reinstall from source to bypass pyproject.toml extras
     "$SETUP_PYTHON" -m pip uninstall -y hermes-agent || true
     "$SETUP_PYTHON" -m pip install --no-deps -e "."
-    "$SETUP_PYTHON" -m pip install honcho-ai "sentence-transformers>=2.2.0,<2.8.0" pypdf beautifulsoup4 || {
+    # Install RAG deps with SQLite backend
+    # numpy<2 for ARMv7 compatibility (sentence-transformers dependency)
+    "$SETUP_PYTHON" -m pip install "numpy<2" honcho-ai "sentence-transformers>=2.2.0,<2.8.0" pypdf beautifulsoup4 || {
         echo -e "${RED}✗${NC} Pi2 dependency installation failed"
         exit 1
     }
-    # Install RAG deps with SQLite backend (skip torch with CUDA)
     echo -e "${CYAN}→${NC} Installing RAG dependencies (SQLite backend for Pi2)..."
-    # Install pre-compiled numpy first (avoids build failure on Pi2 1GB RAM)
-    # numpy is NOT needed for honcho-ai (SQLite backend)
-    # Remove numpy to save space (5.4MB) and avoid ARM wheel issues
-    # Install sentence-transformers with compatible versions
-    "$SETUP_PYTHON" -m pip install honcho-ai "sentence-transformers>=2.2.0,<2.8.0" pypdf beautifulsoup4
     echo -e "${GREEN}✓${NC} Dependencies installed (Pi2 minimal + RAG)"
 else
     # Prefer uv sync with lockfile (hash-verified installs) when available,
