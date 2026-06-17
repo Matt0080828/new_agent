@@ -244,7 +244,8 @@ elif is_raspberry_pi2; then
     # Install RAG deps with SQLite backend (skip torch with CUDA)
     echo -e "${CYAN}→${NC} Installing RAG dependencies (SQLite backend for Pi2)..."
     # Install pre-compiled numpy first (avoids build failure on Pi2 1GB RAM)
-    "$SETUP_PYTHON" -m pip install --only-binary=:all: numpy
+    # Use numpy 1.x which has ARM wheels available
+    "$SETUP_PYTHON" -m pip install "numpy>=1.24,<2.0" --only-binary=:all: --break-system-packages
     # Install sentence-transformers with compatible versions
     "$SETUP_PYTHON" -m pip install honcho-ai "sentence-transformers>=2.2.0,<2.8.0" pypdf beautifulsoup4
     echo -e "${GREEN}✓${NC} Dependencies installed (Pi2 minimal + RAG)"
