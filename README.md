@@ -208,7 +208,8 @@ huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF \
 | `v0.3-pi2` | Added quick migration script |
 | `v0.4-pi2` | Minimal CLI only (35MB) |
 | `v0.5-pi2` | RAG SQLite backend + uvloop fix |
-| `v0.6-pi2` | **Current** - Remove uvloop/fastapi, use asyncio |
+| `v0.6-pi2` | Remove uvloop/fastapi, use asyncio |
+| `v0.7-pi2` | **Current** - Replace chromadb with honcho-ai for RAG |
 
 ## Repository
 
