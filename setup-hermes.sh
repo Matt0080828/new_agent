@@ -236,12 +236,16 @@ elif is_raspberry_pi2; then
     echo -e "${CYAN}→${NC} Raspberry Pi 2 detected — installing minimal CLI bundle"
     echo -e "${CYAN}→${NC} (Skipping extras: web, cli, tty for ARMv7 compatibility)"
     "$SETUP_PYTHON" -m pip install --upgrade pip setuptools wheel
-    # Install base package without extras (avoids uvloop from web)
-    # Force reinstall from source to bypass pyproject.toml extras
-    "$SETUP_PYTHON" -m pip uninstall -y hermes-agent || true
-    "$SETUP_PYTHON" -m pip install --no-deps -e "."
+    # Install hermes-agent core deps (from pyproject.toml dependencies)
+    "$SETUP_PYTHON" -m pip install openai==2.24.0 certifi==2026.5.20 python-dotenv==1.2.2 fire==0.7.1 \
+        httpx==0.28.1 rich==14.3.3 tenacity==9.1.4 pyyaml==6.0.3 ruamel.yaml==0.18.17 \
+        requests==2.33.0 jinja2==3.1.6 pydantic==2.13.4 prompt_toolkit==3.0.52 croniter==6.0.0 \
+        psutil==7.2.2 ptyprocess pyjwt[crypto]==2.13.0 packaging==26.0 || {
+        echo -e "${RED}✗${NC} Core dependency installation failed"
+        exit 1
+    }
     # Install RAG deps with SQLite backend (no scipy needed)
-    # honcho-ai has built-in RAG with minimal deps
+    # honcho-ai has built-in RAG, no external dependencies needed
     "$SETUP_PYTHON" -m pip install honcho-ai pypdf beautifulsoup4 || {
         echo -e "${RED}✗${NC} Pi2 dependency installation failed"
         exit 1
