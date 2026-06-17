@@ -240,9 +240,9 @@ elif is_raspberry_pi2; then
     # Force reinstall from source to bypass pyproject.toml extras
     "$SETUP_PYTHON" -m pip uninstall -y hermes-agent || true
     "$SETUP_PYTHON" -m pip install --no-deps -e "."
-    # Install RAG deps with SQLite backend
-    # numpy<2 for ARMv7 compatibility (sentence-transformers dependency)
-    "$SETUP_PYTHON" -m pip install "numpy<2" honcho-ai "sentence-transformers>=2.2.0,<2.8.0" pypdf beautifulsoup4 || {
+    # Install RAG deps with SQLite backend (no scipy needed)
+    # honcho-ai has built-in RAG with minimal deps
+    "$SETUP_PYTHON" -m pip install honcho-ai pypdf beautifulsoup4 || {
         echo -e "${RED}✗${NC} Pi2 dependency installation failed"
         exit 1
     }
