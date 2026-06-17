@@ -243,8 +243,7 @@ elif is_raspberry_pi2; then
     }
     # Install RAG deps with SQLite backend (skip torch with CUDA)
     echo -e "${CYAN}→${NC} Installing RAG dependencies (SQLite backend for Pi2)..."
-    "$SETUP_PYTHON" -m pip install chromadb sentence-transformers pypdf beautifulsoup4
-    export CHROMA_DB_MODE="sqlite"  # Force SQLite backend on Pi2
+    "$SETUP_PYTHON" -m pip install honcho-ai sentence-transformers pypdf beautifulsoup4
     echo -e "${GREEN}✓${NC} Dependencies installed (Pi2 minimal + RAG)"
 else
     # Prefer uv sync with lockfile (hash-verified installs) when available,
