@@ -207,12 +207,14 @@ huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF \
 | `v0.1-pi2` | Initial Pi2 support |
 | `v0.2-pi2` | Added installation manual |
 | `v0.3-pi2` | Added quick migration script |
-| `v0.4-pi2` | **Current** - Minimal CLI only (35MB) |
+| `v0.4-pi2` | Minimal CLI only (35MB) |
+| `v0.5-pi2` | RAG SQLite backend + uvloop fix |
+| `v0.6-pi2` | **Current** - Remove uvloop/fastapi, use asyncio |
 
 ## Repository
 
 - **GitHub**: https://github.com/Matt0080828/new_agent
-- **Tags**: `v0.4-pi2` (latest)
+- **Tags**: `v0.6-pi2` (latest)
 
 ## Notes
 
