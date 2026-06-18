@@ -227,11 +227,12 @@ huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF \
 | `v0.6-pi2` | Remove uvloop/fastapi, use asyncio |
 | `v0.7-pi2` | Replace chromadb with honcho-ai for RAG |
 | `v0.8-pi2` | Add explicit httpx install in setup script |
+| `v0.9-pi2` | Add Nous Research origin attribution |
 
 ## Repository
 
 - **GitHub**: https://github.com/Matt0080828/new_agent
-- **Tags**: `v0.8-pi2` (latest) |
+- **Tags**: `v0.9-pi2` (latest) |
 
 ## Notes
 
