@@ -8,11 +8,27 @@
 
 This is a minimal CLI version of **Hermes Agent** optimized for **Raspberry Pi 2** (ARMv7 32-bit, 1GB RAM).
 
+This fork is based on [Hermes Agent by Nous Research](https://github.com/NousResearch/hermes-agent),
+modified to run on constrained ARMv7 hardware with only 1GB RAM.
+
 **Key Features:**
 - ✅ CLI-only interface (no TUI/web UI)
 - ✅ Optimized for 1GB RAM
 - ✅ Works with local LLM via lm-studio or llama.cpp
 - ✅ Memory & RAG support (sqlite-vec + sentence-transformers)
+
+## Original Hermes Agent
+
+Hermes Agent is an open-source AI agent by **Nous Research** that:
+
+- Creates skills from experience
+- Improves them during use
+- Runs across CLI, TUI, web dashboard, and Electron app
+- Maintains conversation caching for efficiency
+
+**Repository**: https://github.com/NousResearch/hermes-agent
+
+**License**: MIT
 
 ## Hardware Requirements
 
