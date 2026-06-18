@@ -201,7 +201,7 @@ huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF \
 
 ## Tags
 
-| Tag | Description |
+|| Tag | Description ||
 |-----|-------------|
 | `v0.1-pi2` | Initial Pi2 support |
 | `v0.2-pi2` | Added installation manual |
@@ -209,12 +209,13 @@ huggingface-cli download Qwen/Qwen2.5-1.5B-Instruct-GGUF \
 | `v0.4-pi2` | Minimal CLI only (35MB) |
 | `v0.5-pi2` | RAG SQLite backend + uvloop fix |
 | `v0.6-pi2` | Remove uvloop/fastapi, use asyncio |
-| `v0.7-pi2` | **Current** - Replace chromadb with honcho-ai for RAG |
+| `v0.7-pi2` | Replace chromadb with honcho-ai for RAG |
+| `v0.8-pi2` | Add explicit httpx install in setup script |
 
 ## Repository
 
 - **GitHub**: https://github.com/Matt0080828/new_agent
-|- **Tags**: `v0.7-pi2` (latest) |
+- **Tags**: `v0.8-pi2` (latest) |
 
 ## Notes
 
