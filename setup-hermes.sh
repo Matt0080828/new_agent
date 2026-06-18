@@ -222,6 +222,7 @@ if is_termux; then
     export ANDROID_API_LEVEL="$(getprop ro.build.version.sdk 2>/dev/null || printf '%s' "${ANDROID_API_LEVEL:-}")"
     echo -e "${CYAN}→${NC} Termux detected — installing the tested Android bundle"
     "$SETUP_PYTHON" -m pip install --upgrade pip setuptools wheel
+    "$SETUP_PYTHON" -m pip install httpx
     if [ -f "constraints-termux.txt" ]; then
         "$SETUP_PYTHON" -m pip install -e ".[termux]" -c constraints-termux.txt || {
             echo -e "${YELLOW}⚠${NC} Termux bundle install failed, falling back to base install..."
@@ -236,6 +237,7 @@ elif is_raspberry_pi2; then
     echo -e "${CYAN}→${NC} Raspberry Pi 2 detected — installing minimal CLI bundle"
     echo -e "${CYAN}→${NC} (Skipping extras: web, cli, tty for ARMv7 compatibility)"
     "$SETUP_PYTHON" -m pip install --upgrade pip setuptools wheel
+    "$SETUP_PYTHON" -m pip install httpx
     # Install hermes-agent core deps (from pyproject.toml dependencies)
     "$SETUP_PYTHON" -m pip install openai==2.24.0 certifi==2026.5.20 python-dotenv==1.2.2 fire==0.7.1 \
         httpx==0.28.1 rich==14.3.3 tenacity==9.1.4 pyyaml==6.0.3 ruamel.yaml==0.18.17 \
@@ -281,6 +283,7 @@ else
             || $UV_CMD pip install -e "$_SAFE_SPEC" \
             || $UV_CMD pip install -e "."
     }
+    $UV_CMD pip install httpx
 
     if [ -f "uv.lock" ]; then
         # Hash-verified install (preferred). The lockfile records SHA256
