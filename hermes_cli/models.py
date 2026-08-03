@@ -41,6 +41,7 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
     # Anthropic
     ("anthropic/claude-fable-5",               ""),
     ("anthropic/claude-opus-4.8",              ""),
+    ("anthropic/claude-opus-5",                ""),
     ("anthropic/claude-opus-4.8-fast",         "2x price, higher output speed"),
     ("anthropic/claude-sonnet-5",              ""),
     ("anthropic/claude-haiku-4.5",             ""),
@@ -93,7 +94,6 @@ OPENROUTER_MODELS: list[tuple[str, str]] = [
     ("tencent/hy3:free",                       "free"),
     ("nvidia/nemotron-3-super-120b-a12b:free", "free"),
     ("nvidia/nemotron-3-ultra-550b-a55b:free", "free"),
-    ("inclusionai/ring-2.6-1t:free",           "free"),
 ]
 
 _openrouter_catalog_cache: list[tuple[str, str]] | None = None
