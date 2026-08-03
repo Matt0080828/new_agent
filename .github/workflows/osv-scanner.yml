@@ -24,7 +24,7 @@ on:
   # CI only runs on main. Keep a narrow direct trigger for pi2-lite so
   # branch-scoped Code Scanning alerts close after lockfile-only fixes.
   push:
-    branches: [pi2-lite]
+    branches: [main]
     paths:
       - uv.lock
       - package-lock.json
