@@ -1,22 +1,16 @@
-# Hermes Agent IoT / Raspberry Pi 2+ profile
+# Pi2 Agent — Raspberry Pi 2+ Profile
 
-This repository is a Pi2/IoT-oriented flavor of the original Hermes Agent source at:
+Lightweight AI agent profile for **Raspberry Pi 2** (ARMv7 32-bit, 1GB RAM) and similar constrained Linux devices.
 
-`/media/matt/E/hermes-agent`
-
-Goal: preserve native Hermes Agent architecture and feature compatibility while making the default Raspberry Pi 2 install small enough to be practical on ARMv7 / 1GB RAM.
+Goal: preserve full agent architecture and feature compatibility while making the default Raspberry Pi 2 install small enough to be practical on ARMv7 / 1GB RAM.
 
 This profile is primarily designed for embedded-system development: always-on controllers, sensor/automation nodes, lab devices, robotics gateways, home/industrial IoT boxes, and other constrained Linux deployments where low memory use, predictable dependencies, and remote-first AI services matter more than desktop-heavy local stacks.
 
-Raspberry Pi 2 is the minimum/baseline target for this profile, not the maximum supported device. The same lightweight install path is suitable for Pi2-class or better Linux systems such as Raspberry Pi 3/4/5, Pi Zero 2 W, ARM64 SBCs, x86 mini PCs, and VMs. On stronger hardware, you can keep the safe Pi2 defaults or opt into heavier Hermes extras after install.
-
-This is not a separate mini-agent. The Python package path, CLI entrypoint, tools, plugins, gateway, memory, cron, MCP, ACP, and provider architecture stay intact. The Pi2 profile only changes default installation choices and default enabled tool surface.
+Raspberry Pi 2 is the minimum/baseline target for this profile, not the maximum supported device. The same lightweight install path is suitable for Pi2-class or better Linux systems such as Raspberry Pi 3/4/5, Pi Zero 2 W, ARM64 SBCs, x86 mini PCs, and VMs. On stronger hardware, you can keep the safe Pi2 defaults or opt into heavier extras after install.
 
 ## What is preserved
 
-Kept as native Hermes functionality:
-
-- `hermes` CLI entrypoint from `pyproject.toml`
+- CLI entrypoint from `pyproject.toml`
 - core agent loop and provider routing
 - tools system and toolsets
 - skills system
@@ -45,8 +39,6 @@ The code remains present. Heavy features can be re-enabled later with `hermes to
 
 ## Install profiles
 
-Use the native-compatible installer:
-
 ```bash
 bash setup-pi2-minimal.sh --profile minimal
 bash setup-pi2-minimal.sh --profile iot
@@ -55,14 +47,14 @@ bash setup-pi2-minimal.sh --profile full   # stronger edge host only
 bash setup-pi2-minimal.sh --profile dev    # contributor machine
 ```
 
-Backward-compatible aliases are still accepted: `core` -> `minimal`, `native` -> `iot`.
+Backward-compatible aliases: `core` -> `minimal`, `native` -> `iot`.
 
 Profiles:
 
-- `minimal`: smallest practical Hermes CLI profile. Installs package through `pip install -e .[cli,pty]`, writes a config that disables heavy toolsets by default.
+- `minimal`: smallest practical CLI profile. Installs package through `pip install -e .[cli,pty]`, writes a config that disables heavy toolsets by default.
 - `iot`: minimal plus MCP/ACP/Home Assistant/MQTT/SMS extras. Still disables browser/media/messaging tool surfaces by default.
 - `rag`: iot plus lightweight document helpers and Honcho optional dependency. Remote embeddings are recommended; local torch stacks are not installed by default.
-- `full`: broader cross-platform Hermes extras for stronger Raspberry Pi, ARM64, x86 mini PC, VM, or NAS hosts.
+- `full`: broader cross-platform extras for stronger Raspberry Pi, ARM64, x86 mini PC, VM, or NAS hosts.
 - `dev`: full plus test/developer tooling.
 
 ## Optional integration security posture
@@ -71,7 +63,7 @@ Pi2/minimal and IoT profiles keep risky or heavy integrations opt-in:
 
 - `website/` is for full/dev builds and should stay npm-audit clean.
 - `plugins/platforms/photon/sidecar/` is a full-profile sidecar, not a Pi2/minimal default.
-- `scripts/whatsapp-bridge/` is disabled by default because Baileys currently has a critical advisory with no fixed version (`GHSA-qvv5-jq5g-4cgg`). To opt in on an isolated host, review the advisory, run `npm run install:unsafe-baileys` inside `scripts/whatsapp-bridge/`, and start it with `HERMES_ENABLE_EXPERIMENTAL_WHATSAPP_BRIDGE=1`.
+- `scripts/whatsapp-bridge/` is disabled by default because Baileys currently has a critical advisory with no fixed version (`GHSA-qvv5-jq5g-4cgg`). To opt in on an isolated host, review the advisory, run `npm run install:unsafe-baileys` inside `scripts/whatsapp-bridge/`, and start it with `AGENT_ENABLE_EXPERIMENTAL_WHATSAPP_BRIDGE=1`.
 
 ## Recommended Pi2 install
 
@@ -79,8 +71,8 @@ Pi2/minimal and IoT profiles keep risky or heavy integrations opt-in:
 sudo apt update
 sudo apt install -y python3 python3-venv python3-pip build-essential git
 
-git clone --depth 1 https://github.com/matttest0080-prog/hermes-agent-iot.git
-cd hermes-agent-iot
+git clone --depth 1 https://github.com/Matt0080828/new_agent.git
+cd new_agent
 bash setup-pi2-minimal.sh --profile minimal
 
 source ~/.hermes-venv/bin/activate
@@ -88,7 +80,7 @@ hermes setup model
 hermes
 ```
 
-Hermes requires Python `>=3.11,<3.14`. If your Raspberry Pi OS image ships older Python, install Python 3.11+ first.
+Requires Python `>=3.11,<3.14`. If your Raspberry Pi OS image ships older Python, install Python 3.11+ first.
 
 ## Robotics applications
 
@@ -97,7 +89,7 @@ This fork can be used as a lightweight robot edge agent: it coordinates high-lev
 Recommended split:
 
 ```text
-Cloud/LAN LLM or operator UI -> Hermes Agent IoT -> MQTT/HTTP/serial bridge -> MCU/ROS controller -> robot body
+Cloud/LAN LLM or operator UI -> Agent (IoT) -> MQTT/HTTP/serial bridge -> MCU/ROS controller -> robot body
 ```
 
 See `ROBOTICS.md` for recommended robot architectures, MQTT topic conventions, safety limits, watchdog tasks, and next implementation steps.
@@ -126,35 +118,35 @@ MQTT brokers do not provide history by default. `mqtt_subscribe_recent` returns 
 
 ## Local llama.cpp / OpenAI-compatible model
 
-Pi2 can connect to a local or LAN OpenAI-compatible endpoint. For example, if `llama.cpp` server is running at `http://localhost:8080/v1`, configure Hermes through:
+Pi2 can connect to a local or LAN OpenAI-compatible endpoint. For example, if `llama.cpp` server is running at `http://localhost:8080/v1`, configure through:
 
 ```bash
 hermes setup model
 ```
 
-or edit `~/.hermes/config.yaml` using the normal Hermes config commands.
+or edit `~/.hermes/config.yaml` using the normal config commands.
 
 Important: a 7B model on Raspberry Pi 2 is usually impractical because of RAM and speed. Prefer:
 
 - a remote/OpenRouter/OpenAI-compatible provider, or
 - a much smaller quantized model, or
-- a stronger LAN machine running `llama.cpp` with Pi2 acting as the Hermes client.
+- a stronger LAN machine running `llama.cpp` with Pi2 acting as the client.
 
 ## Context and performance defaults
 
-Upstream Hermes keeps a 64K runtime-context floor for reliable full tool use with local/Ollama models. The Pi2 profiles lower that floor through `agent.minimum_tool_context_length` so small local models can still run in a degraded, low-tool mode:
+Upstream keeps a 64K runtime-context floor for reliable full tool use with local/Ollama models. The Pi2 profiles lower that floor through `agent.minimum_tool_context_length` so small local models can still run in a degraded, low-tool mode:
 
 - `config.pi2-core.yaml`: `2048` tokens for tiny local chat / minimal tools
 - `config.pi2-native.yaml`: `8192` tokens for broader native workflows
 - `config.pi2-rag.yaml`: `8192` tokens locally, with remote/central RAG preferred
 
-For full Hermes tool use, coding, or shared RAG, keep using a stronger LAN/cloud model with 64K+ context. The Pi2 override is an escape hatch for constrained local inference, not a claim that 2K can carry the complete Hermes tool surface.
+For full tool use, coding, or shared RAG, keep using a stronger LAN/cloud model with 64K+ context. The Pi2 override is an escape hatch for constrained local inference.
 
 ## Memory and RAG posture
 
 Default Pi2 memory:
 
-- built-in Hermes memory
+- built-in agent memory
 - session search
 - SQLite/FTS-style lightweight local state
 
@@ -168,7 +160,7 @@ The RAG profile intentionally avoids installing `torch`, `sentence-transformers`
 
 ## Multi-Pi2 shared memory / RAG architecture
 
-For multiple Raspberry Pi 2 nodes, use the Pi2 devices as lightweight Hermes clients and put shared memory/RAG on a stronger central node. Do not run a full local embedding/vector stack on every Pi2.
+For multiple Raspberry Pi 2 nodes, use the Pi2 devices as lightweight clients and put shared memory/RAG on a stronger central node. Do not run a full local embedding/vector stack on every Pi2.
 
 Recommended layout:
 
@@ -182,7 +174,7 @@ Pi2 garage  ┘                    ├── SQLite/Postgres memory store
 
 Pi2 nodes should:
 
-- run Hermes Agent with the core/native/rag Pi2 profile
+- run the agent with the core/native/rag Pi2 profile
 - keep local short-term/session state lightweight
 - send memory writes, document ingests, and RAG queries to the central API
 - avoid local `torch`, `sentence-transformers`, and `chromadb`
@@ -220,7 +212,7 @@ The installer copies one to `~/.hermes/config.yaml` only if that file does not a
 
 ## Re-enabling features later
 
-Use native Hermes controls:
+Use native controls:
 
 ```bash
 hermes tools
@@ -242,7 +234,7 @@ hermes --help
 python -m py_compile cli.py run_agent.py model_tools.py toolsets.py
 python - <<'PY'
 from toolsets import resolve_toolset
-print('hermes-cli tools:', len(resolve_toolset('hermes-cli')))
+print('cli tools:', len(resolve_toolset('hermes-cli')))
 print('file tools:', resolve_toolset('file'))
 PY
 ```

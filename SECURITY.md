@@ -1,15 +1,18 @@
-# Hermes Agent Security Policy
+# Security Policy (Pi2 Agent Fork)
 
-This document describes Hermes Agent's trust model, names the one
-security boundary the project treats as load-bearing, and defines the
-scope for vulnerability reports.
+This is a Raspberry Pi 2 / IoT fork. This document describes the
+trust model, names the security boundary the project treats as
+load-bearing, and defines the scope for vulnerability reports.
+
+For upstream vulnerabilities, see
+[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent/security).
 
 ## 1. Reporting a Vulnerability
 
-Report privately via [GitHub Security Advisories](https://github.com/NousResearch/hermes-agent/security/advisories/new)
-or **security@nousresearch.com**. Do not open public issues for
-security vulnerabilities. **Hermes Agent does not operate a bug
-bounty program.**
+Report Pi2/IoT-specific vulnerabilities via
+[GitHub Issues](https://github.com/Matt0080828/new_agent/issues).
+For issues in the upstream agent code, report to
+[NousResearch/hermes-agent Security Advisories](https://github.com/NousResearch/hermes-agent/security/advisories/new).
 
 A useful report includes:
 
