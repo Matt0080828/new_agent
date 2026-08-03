@@ -73,13 +73,13 @@ jobs:
   typecheck:
     name: TypeScript
     needs: detect
-    if: needs.detect.outputs.frontend == 'true'
+    if: false  # Pi2: no frontend
     uses: ./.github/workflows/typecheck.yml
 
   docs-site:
     name: Docs Site
     needs: detect
-    if: needs.detect.outputs.site == 'true'
+    if: false  # Pi2: no website
     uses: ./.github/workflows/docs-site-checks.yml
 
   history-check:
@@ -102,13 +102,13 @@ jobs:
   docker-lint:
     name: Lint Docker scripts
     needs: detect
-    if: needs.detect.outputs.docker_meta == 'true'
+    if: false  # Pi2: no Docker build
     uses: ./.github/workflows/docker-lint.yml
 
   docker:
     name: Build&Test Docker image
     needs: detect
-    if: needs.detect.outputs.python == 'true' || needs.detect.outputs.frontend == 'true' || needs.detect.outputs.docker_meta == 'true'
+    if: false  # Pi2: no Docker build
     uses: ./.github/workflows/docker.yml
     secrets: inherit
 
@@ -139,12 +139,9 @@ jobs:
     needs:
       - tests
       - lint
-      - typecheck
-      - docs-site
       - history-check
       - contributor-check
       - uv-lockfile
-      - docker-lint
       - supply-chain
       - osv-scanner
       # we don't require docker to pass rn because it's so slow lol
@@ -174,8 +171,8 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────
   ci-timings:
     name: CI timing report
-    needs: [all-checks-pass, docker]
-    if: always()
+    needs: [all-checks-pass]
+    if: false  # Pi2: skip timing report
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
