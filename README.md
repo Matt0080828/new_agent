@@ -74,23 +74,27 @@ heavy toolsets disabled.
 
 ```text
 llama-server (llama-cpp pkg)   :8080, 127.0.0.1
-  └─ functiongemma-270m-it Q4_K_M  (~200 MB, English, 32K ctx, ~30-50 tok/s on A55)
+  └─ functiongemma-270m-it Q4_K_M  (~200 MB, English, up to 32K ctx, ~30-50 tok/s on A55)
        ↓ OpenAI-compatible /v1
 hermes (hermes-agent pkg)      CLI @ serial/ssh
 ```
 
 FunctionGemma-270M is a function-calling specialist — the right floor model for
 tool use at this size (base-only 120–135 MB models have no reliable function
-calling). Its max context is **32K**, which matches the source default floor —
-no per-deploy override is needed:
+calling). Its max context is **32K**, but on the T830's ~1.65 GB RAM the KV
+cache is the binding constraint: at ~52 KB/token, a 32K window alone is ~1.65 GB
+and OOMs the box. So we pin both the llama.cpp `context_size` and the Hermes
+context floor to **2048**:
 
 ```yaml
 agent:
-  minimum_tool_context_length: 32000   # FunctionGemma-270M max context (32K)
+  minimum_tool_context_length: 2048   # match llama context_size=2048 (RAM-limited)
 ```
 
-A larger window costs KV-cache RAM on this model, so keep it at or below 32K.
-The source default `MINIMUM_CONTEXT_LENGTH = 32_000` already fits FunctionGemma.
+Keep both values equal so Hermes does not warn that the model's context is
+below its floor. If you move the model to a bigger-RAM LAN host, raise both
+`context_size` and `minimum_tool_context_length` together (the source default
+floor is `MINIMUM_CONTEXT_LENGTH = 32_000`).
 
 ### Remote / LAN model
 
@@ -142,7 +146,7 @@ missing dependency.
 
 | Model | Context floor | Notes |
 |---|---|---|
-| FunctionGemma-270M (on-box) | 32000 | 32K max context; matches source default |
+| FunctionGemma-270M (on-box) | 2048 | model max 32K, but KV RAM caps it to 2048 on 1.65GB T830 |
 | LAN / cloud model | 32000+ (default) | full tool use, coding, shared RAG |
 
 `MINIMUM_CONTEXT_LENGTH` (32K in source) is the *default* floor; the
