@@ -1,37 +1,38 @@
 # t830-slim agent
 
-Stdlib-only OpenAI-compatible chat client. This branch is for a **T830 / FG370 OpenWrt** slim path. It does **not** install or run the full Hermes / `new_agent` Python package on the CPE.
+Stdlib rewrite: chat + SQLite FTS RAG + whitelist tools + markdown skills.
+Not Hermes. Not hardware-verified on T830.
 
-Not hardware-verified on T830.
-
-## Why a separate client
-
-Full `new_agent` (`hermes-agent` 0.18.2) needs Python `>=3.11,<3.14`, pip, venv, and wheels with C/Rust extensions (`pydantic-core`, `cryptography`, `Pillow`, …). T830 is OpenWrt aarch64 musl, ~1.65 GiB RAM, with WiFi7/5G/mesh often leaving 400–600 MiB. That install contract does not match.
-
-This client uses only the Python standard library.
-
-## Run (any Linux with python3)
+## Run
 
 ```bash
 python3 -S slim/agent.py --help
-python3 -S slim/agent.py \
-  --base-url http://127.0.0.1:8080/v1 \
-  --model <id-from-/v1/models> \
-  --once 'ping'
+python3 -S slim/agent.py --ingest-only
+python3 -S slim/agent.py --base-url http://127.0.0.1:8080/v1 --model tiny --once 'what is this device'
 ```
 
-Environment: `SLIM_BASE_URL`, `SLIM_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS` (default 256), `SLIM_TIMEOUT` (default 120).
+Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_CONFIG`.
 
-Local llama.cpp on T830 should stay around 270M Q4 and ctx 2048. Do not load 3B models on the CPE.
+Optional JSON `--config`:
+`base_url`, `fallback_url`, `model`, `fallback_model`, `data_dir`, `skills_dir`, `docs_dir`, `mqtt_http`.
+
+## Features
+
+- Chat via OpenAI-compatible HTTP; fallback URL on request failure
+- Prompt trimmed to ~6000 chars (~2048-token class)
+- RAG: FTS5 keyword search over `slim/skills`, `slim/docs`, `slim/data`
+- Tools (one JSON call then a final answer): `rag_search`, `read_file`, `write_file` (jailed, 8 KiB), `mqtt_publish` only if `SLIM_MQTT_HTTP` is set
+- Skills: `slim/skills/*.md` injected as text; scripts are not executed
+- Session turns stored in `slim/data/slim.sqlite`
 
 ## Tests
 
 ```bash
 python3 -S slim/test_agent.py
+python3 -S slim/test_rag.py
+python3 -S slim/test_tools.py
 ```
 
-## Scope
+## Out of scope
 
-- Keep Hermes core on `main` (Pi2 / Debian). Do not delete `agent/`, `hermes_cli/`, tools, gateway.
-- This directory is the T830 starting point: remote or local OpenAI-compatible HTTP, no pip.
-- Do not claim OpenWrt/T830 success until a device run exists.
+Gateway, dashboard, Honcho, embeddings, MCP, arbitrary shell, full Hermes skills, 3B local models.
