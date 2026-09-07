@@ -902,13 +902,6 @@ class HermesConsoleEngine:
                 [("list",), ("test",), ("doctor",), ("revoke",)],
                 {("test",), ("doctor",), ("revoke",)},
             ),
-            "slack": (
-                "hermes_cli.subcommands.slack",
-                "build_slack_parser",
-                "cmd_slack",
-                [("manifest",)],
-                set(),
-            ),
             "profile": (
                 "hermes_cli.subcommands.profile",
                 "build_profile_parser",
@@ -1013,15 +1006,6 @@ class HermesConsoleEngine:
             "Show active profile status.",
             _profile_status,
         )
-        self.register(
-            ("send",),
-            "send --to <target> <message>",
-            "Send a message to a configured platform.",
-            _adder_handler("send", (), "hermes_cli.send_cmd", "register_send_subparser"),
-            mutating=True,
-            confirmation="Send this message?",
-        )
-
         portal_paths = [("info",), ("tools",)]
         _register_command_family(
             self,

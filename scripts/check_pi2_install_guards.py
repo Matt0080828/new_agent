@@ -214,28 +214,6 @@ def check_pi2_context_templates(repo: Path, failures: FailureCollector) -> None:
             )
 
 
-def check_web_server(repo: Path, failures: FailureCollector) -> None:
-    web_server = repo / "hermes_cli" / "web_server.py"
-    if not web_server.exists():
-        failures.add("hermes_cli/web_server.py is missing")
-        return
-
-    text = web_server.read_text(encoding="utf-8")
-    compact = re.sub(r"\s+", "", text)
-    if "uvicorn.Config" in text and 'loop="asyncio"' not in compact and "loop='asyncio'" not in compact:
-        failures.add(
-            'hermes_cli/web_server.py must pass loop="asyncio" to uvicorn.Config so Pi2/ARMv7 never auto-selects uvloop'
-        )
-
-    for literal in iter_python_string_literals(web_server):
-        package = normalize_dep(literal)
-        if package in ("uvicorn[standard]", "uvloop"):
-            failures.add(
-                f"hermes_cli/web_server.py user-facing install/runtime string contains {literal!r}; "
-                "Pi2 guidance should use plain uvicorn"
-            )
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".", help="Repository root to check")
@@ -249,7 +227,6 @@ def main(argv: list[str] | None = None) -> int:
     check_setup_pi2_minimal(repo, failures)
     check_iot_optional_deps(repo, failures)
     check_pi2_context_templates(repo, failures)
-    check_web_server(repo, failures)
     failures.report()
     return failures.exit_code()
 

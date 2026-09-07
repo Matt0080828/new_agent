@@ -1463,17 +1463,20 @@ async def _send_signal(extra, chat_id, message, media_files=None):
     except ImportError:
         return {"error": "httpx not installed"}
 
-    from gateway.platforms.signal_rate_limit import (
-        SIGNAL_BATCH_PACING_NOTICE_THRESHOLD,
-        SIGNAL_MAX_ATTACHMENTS_PER_MSG,
-        SIGNAL_RATE_LIMIT_MAX_ATTEMPTS,
-        _extract_retry_after_seconds,
-        _format_wait,
-        _is_signal_rate_limit_error,
-        _signal_send_timeout,
-        get_scheduler,
-    )
-    from gateway.platforms.signal_format import markdown_to_signal
+    try:
+        from gateway.platforms.signal_rate_limit import (
+            SIGNAL_BATCH_PACING_NOTICE_THRESHOLD,
+            SIGNAL_MAX_ATTACHMENTS_PER_MSG,
+            SIGNAL_RATE_LIMIT_MAX_ATTEMPTS,
+            _extract_retry_after_seconds,
+            _format_wait,
+            _is_signal_rate_limit_error,
+            _signal_send_timeout,
+            get_scheduler,
+        )
+        from gateway.platforms.signal_format import markdown_to_signal
+    except ImportError:
+        return {"error": "Signal adapter modules not available in this build."}
 
     try:
         http_url = extra.get("http_url", "http://127.0.0.1:8080").rstrip("/")

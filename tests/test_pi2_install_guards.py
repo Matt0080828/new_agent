@@ -28,11 +28,6 @@ mqtt = ["paho-mqtt==2.1.0"]
         'LAZY_DEPS = {"tool.dashboard": ("fastapi==0.133.1", "uvicorn==0.41.0"), "tool.mqtt": ("paho-mqtt==2.1.0",)}\n',
         encoding="utf-8",
     )
-    (root / "hermes_cli").mkdir()
-    (root / "hermes_cli" / "web_server.py").write_text(
-        'config = uvicorn.Config(app, host="127.0.0.1", port=9119, loop="asyncio")\n',
-        encoding="utf-8",
-    )
     (root / "setup-pi2.sh").write_text(
         """
 #!/usr/bin/env bash
@@ -132,21 +127,6 @@ class Pi2InstallGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("chromadb", result.stdout)
         self.assertIn("sentence-transformers", result.stdout)
-
-    def test_pi2_install_guard_requires_asyncio_loop_even_if_comment_mentions_uvloop(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp)
-            write_minimal_repo(repo)
-            web_server = repo / "hermes_cli" / "web_server.py"
-            web_server.write_text(
-                "# Avoid uvloop on Pi2.\nconfig = uvicorn.Config(app, host='127.0.0.1', port=9119)\n",
-                encoding="utf-8",
-            )
-
-            result = self.run_guard(repo)
-
-        self.assertEqual(result.returncode, 1)
-        self.assertIn('loop="asyncio"', result.stdout)
 
     def test_pi2_install_guard_requires_sqlite_vec_opt_in_on_armv7(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

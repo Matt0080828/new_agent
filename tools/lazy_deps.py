@@ -218,16 +218,6 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # ─── Tools ─────────────────────────────────────────────────────────────
     # ACP adapter (VS Code / Zed / JetBrains integration)
     "tool.acp": ("agent-client-protocol==0.9.0",),
-    # Dashboard (`hermes dashboard`)
-    "tool.dashboard": (
-        "fastapi==0.133.1",
-        # Pi2/ARMv7 cannot reliably install or run uvloop. Use uvicorn's
-        # native asyncio dependency set; avoid uvicorn[standard], which pulls
-        # uvloop/httptools/watchfiles.
-        "uvicorn==0.41.0",
-        "starlette==1.3.1",  # Security floor — keep lazy-install in sync with pyproject [web]
-        "python-multipart==0.0.31",  # FastAPI UploadFile/Form; includes multipart parser fixes
-    ),
     # Vision image-resize recovery (Pillow). Pillow is now a CORE dependency
     # (pyproject `dependencies`), so this entry is a belt-and-suspenders fallback
     # for stripped/source-build installs that somehow dropped it. The vision

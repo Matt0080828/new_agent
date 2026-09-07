@@ -191,7 +191,13 @@ DEFAULT_FALLBACK_CONTEXT = CONTEXT_PROBE_TIERS[0]
 # Minimum context length required to run Hermes Agent.  Models with fewer
 # tokens cannot maintain enough working memory for tool-calling workflows.
 # Sessions, model switches, and cron jobs should reject models below this.
-MINIMUM_CONTEXT_LENGTH = 64_000
+#
+# t830 fork: lowered from 64_000 to 32_000 for edge deployments where the
+# only viable local models train at 32K (FunctionGemma-270M, Qwen2.5-0.5B/1.5B).
+# Hermes' real prompt is ~2-3K tokens; the 64K default is a cloud-model safety
+# margin, not a hard requirement. Per-session override remains available via
+# `agent.minimum_tool_context_length` in config.yaml.
+MINIMUM_CONTEXT_LENGTH = 32_000
 
 # Short-lived in-process cache for local-server context probes. Bounds the
 # probe rate when the new local-endpoint live-probe paths (reconcile-on-hit +
