@@ -33,6 +33,26 @@ python3 -S slim/test_rag.py
 python3 -S slim/test_tools.py
 ```
 
+## C++ executable (same features)
+
+Host:
+
+```bash
+make -C slim/cpp host
+./slim/cpp/slim-agent --help
+```
+
+T830 (OpenWrt musl gcc 9.3):
+
+```bash
+make -C slim/cpp t830
+file slim/cpp/slim-agent-t830
+# ELF aarch64, interpreter /lib/ld-musl-aarch64.so.1
+# NEEDED: libstdc++.so.6 libgcc_s.so.1 libc.so
+```
+
+Copy `slim-agent-t830` plus `slim/skills` onto the CPE. Same flags as the Python client (`--base-url`, `--model`, `--once`, `--data-dir`). RAG is keyword scan of `.md`/`.txt` (no SQLite). Not hardware-verified on T830.
+
 ## Out of scope
 
 Gateway, dashboard, Honcho, embeddings, MCP, arbitrary shell, full Hermes skills, 3B local models.
