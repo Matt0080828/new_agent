@@ -24,7 +24,7 @@ from session import session_append, session_load, session_path, valid_session_na
 from skills import format_skills, load_skills
 from sse import assemble
 from stream import stream_completion
-from tools import TOOLS, parse_tool_call, run_tool
+from tools import TOOLS, ChangeQueue, ToolBudget, parse_tool_call, run_tool
 
 DEFAULT_MAX_TOKENS = 256
 DEFAULT_TIMEOUT = 120
@@ -53,6 +53,21 @@ def _record_turn(cfg, role, text):
     ok, why = session_append(path, role, text)
     if not ok:
         sys.stderr.write("[slim] session: %s\n" % why)
+
+
+def _apply_changes(queue, budget):
+    """Write what the turn staged and report it. This is the operator's audit line: a model
+    that asked for five writes must be visible as five lines, not as silence."""
+    if budget.used or budget.elided:
+        sys.stderr.write("[slim] %s\n" % budget.summary())
+    if not queue.entries:
+        return
+    wrote, failures = queue.apply()
+    for line in wrote:
+        sys.stderr.write("[slim] %s\n" % line)
+    for line in failures:
+        sys.stderr.write("[slim] change failed: %s\n" % line)
+    sys.stderr.write("[slim] changes: %s\n" % queue.summary())
 
 
 def _stream_to_stdout():
@@ -223,6 +238,8 @@ def run_turn(user_text, cfg, conn):
         on_delta=emit,
     )
     parsed = parse_tool_call(reply)
+    budget = ToolBudget()
+    queue = ChangeQueue()
     if parsed:
         name, args = parsed
         detail = args.get("path") or args.get("topic") or ""
@@ -231,7 +248,8 @@ def run_turn(user_text, cfg, conn):
                          % (name, detail, "allow" if ok else "deny", reason))
         if ok:
             try:
-                result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "")
+                result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "",
+                                  queue=queue, budget=budget)
             except (ValueError, OSError) as exc:
                 result = "tool error: %s" % exc
         else:
@@ -253,6 +271,7 @@ def run_turn(user_text, cfg, conn):
             stream=streaming,
             on_delta=emit,
         )
+    _apply_changes(queue, budget)
     log_turn(conn, "user", user_text)
     log_turn(conn, "assistant", reply)
     _record_turn(cfg, "user", user_text)

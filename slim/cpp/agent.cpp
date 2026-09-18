@@ -2,6 +2,7 @@
 #include "policy.hpp"
 #include "session.hpp"
 #include "sse.hpp"
+#include "tools.hpp"
 #include "util.hpp"
 
 #include <cstdlib>
@@ -13,7 +14,6 @@
 #include <unistd.h>
 #include <vector>
 
-static const size_t kMaxWrite = 8 * 1024;
 static const size_t kMaxPrompt = 6000;
 
 struct Cfg {
@@ -35,6 +35,7 @@ struct Cfg {
   std::string session;       // --session NAME / SLIM_SESSION
   std::string session_file;  // <data_dir>/sessions/<name>.jsonl
   int history;               // --history N: how many turns to replay into the prompt
+  bool dry_run_writes;       // --dry-run-writes: report planned writes, write nothing
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -219,81 +220,31 @@ static std::string sanitize_reply(std::string s) {
   return out;
 }
 
-static void audit_tool(const std::string& tool, const std::string& detail, bool allowed,
-                        const std::string& why) {
-  std::cerr << "[slim] tool " << tool << " (" << detail << ") -> "
-            << (allowed ? "allow" : "deny") << ": " << why << "\\n";
+// The RAG index lives here (the agent owns the directories); the tool layer takes it as
+// an injected function so it stays testable without argv.
+static std::string agent_rag(void* ctx, const std::string& q) {
+  const Cfg* cfg = static_cast<const Cfg*>(ctx);
+  std::vector<Hit> hits = rag_search(*cfg, q, 3);
+  std::ostringstream o;
+  o << "[";
+  for (size_t i = 0; i < hits.size(); ++i) {
+    if (i)
+      o << ",";
+    o << "{\"path\":\"" << json_escape(hits[i].path) << "\",\"snippet\":\""
+      << json_escape(hits[i].snippet) << "\"}";
+  }
+  o << "]";
+  return o.str();
 }
 
-// human_initiated defaults to false on purpose: a call site that forgets to say
-// who asked gets the fail-closed answer.
-static std::string run_tool(const Cfg& cfg, const std::string& name, const std::string& obj,
-                            bool human_initiated = false) {
-  if (name == "rag_search") {
-    std::string q;
-    json_get_string_field(obj, "query", q);
-    std::vector<Hit> hits = rag_search(cfg, q, 3);
-    std::ostringstream o;
-    o << "[";
-    for (size_t i = 0; i < hits.size(); ++i) {
-      if (i)
-        o << ",";
-      o << "{\"path\":\"" << json_escape(hits[i].path) << "\",\"snippet\":\"" << json_escape(hits[i].snippet)
-        << "\"}";
-    }
-    o << "]";
-    return o.str();
-  }
-  if (name == "read_file") {
-    std::string rel, full, err;
-    json_get_string_field(obj, "path", rel);
-    if (!jail_path(cfg.data_dir, rel, full, err))
-      return "tool error: " + err;
-    std::string body = read_file_limited(full, 16 * 1024);
-    if (body.empty())
-      return "tool error: empty or missing";
-    return body;
-  }
-  if (name == "write_file") {
-    std::string rel, content, full, err, why;
-    json_get_string_field(obj, "path", rel);
-    json_get_string_field(obj, "content", content);
-    if (!jail_path(cfg.data_dir, rel, full, err))
-      return "tool error: " + err;
-    if (protected_path(rel, why)) {
-      audit_tool(name, rel, false, why);
-      return "tool error: " + why;
-    }
-    if (!approve_mutation(cfg.policy, name, rel, human_initiated, why)) {
-      audit_tool(name, rel, false, why);
-      return "tool error: " + why;
-    }
-    audit_tool(name, rel, true, why);
-    if (!write_file_limited(full, content, kMaxWrite, err))
-      return "tool error: " + err;
-    return "wrote " + rel;
-  }
-  if (name == "mqtt_publish") {
-    if (cfg.mqtt_http.empty())
-      return "tool error: mqtt disabled; set SLIM_MQTT_HTTP";
-    std::string topic, payload, why;
-    json_get_string_field(obj, "topic", topic);
-    json_get_string_field(obj, "payload", payload);
-    if (!approve_mutation(cfg.policy, name, topic, human_initiated, why)) {
-      audit_tool(name, topic, false, why);
-      return "tool error: " + why;
-    }
-    audit_tool(name, topic, true, why);
-    std::ostringstream js;
-    js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
-    // Deliberately single-shot: a publish is a mutation, and a retry after an
-    // ambiguous failure can duplicate the effect.
-    HttpResult r = http_post_json(cfg.mqtt_http, js.str(), "", 10);
-    if (!r.error.empty() && r.status == 0)
-      return "tool error: " + r.error;
-    return "mqtt http " + r.body.substr(0, 200);
-  }
-  return "tool error: unknown tool";
+static ToolEnv tool_env_from(const Cfg& cfg) {
+  ToolEnv env;
+  env.data_dir = cfg.data_dir;
+  env.mqtt_http = cfg.mqtt_http;
+  env.policy = cfg.policy;
+  env.rag_fn = &agent_rag;
+  env.rag_ctx = const_cast<Cfg*>(&cfg);
+  return env;
 }
 
 static std::string first_word(const std::string& s, std::string& rest) {
@@ -325,26 +276,43 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
   if (cmd == "/rag") {
     std::ostringstream js;
     js << "{\"query\":\"" << json_escape(rest) << "\"}";
-    return run_tool(cfg, "rag_search", js.str(), true);
+    return run_tool(tool_env_from(cfg), "rag_search", js.str(), true, 0, 0);
   }
   if (cmd == "/read") {
     std::ostringstream js;
     js << "{\"path\":\"" << json_escape(rest) << "\"}";
-    return run_tool(cfg, "read_file", js.str(), true);
+    return run_tool(tool_env_from(cfg), "read_file", js.str(), true, 0, 0);
   }
   if (cmd == "/write") {
     std::string path, content;
     path = first_word(rest, content);
     std::ostringstream js;
     js << "{\"path\":\"" << json_escape(path) << "\",\"content\":\"" << json_escape(content) << "\"}";
-    return run_tool(cfg, "write_file", js.str(), true);
+    if (cfg.dry_run_writes) {
+      // Stage instead of writing and report what would have changed. Nothing is written
+      // in this mode, which is the point of having it on a device you cannot easily
+      // recover.
+      std::string full, err, why;
+      if (!jail_path(cfg.data_dir, path, full, err))
+        return "tool error: " + err;
+      if (protected_path(path, why))
+        return "tool error: " + why;
+      ChangeQueue planned;
+      if (!planned.stage(path, full, content, why))
+        return "tool error: " + why;
+      std::ostringstream msg;
+      msg << "dry run: " << planned.summary() << "\nwould write " << path << " ("
+          << content.size() << " bytes)";
+      return msg.str();
+    }
+    return run_tool(tool_env_from(cfg), "write_file", js.str(), true, 0, 0);
   }
   if (cmd == "/mqtt") {
     std::string topic, payload;
     topic = first_word(rest, payload);
     std::ostringstream js;
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
-    return run_tool(cfg, "mqtt_publish", js.str(), true);
+    return run_tool(tool_env_from(cfg), "mqtt_publish", js.str(), true, 0, 0);
   }
   return "unknown command; /help";
 }
@@ -401,6 +369,7 @@ static void usage() {
             << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
             << "         retries transport errors, 429 and 5xx; mutations are never retried\n"
             << "  policy: model-initiated writes/publishes are denied unless enabled\n"
+            << "  writes: --dry-run-writes reports what /write would change and writes nothing\n"
             << "          --allow-write / --allow-mqtt (or SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1)\n"
             << "          state files (*.sqlite, *.db, dotfiles) are never writable\n"
             << "          --non-interactive turns off the approval prompt (deny by default)\n"
@@ -430,6 +399,7 @@ int main(int argc, char** argv) {
   cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
   cfg.policy.interactive = isatty(0) != 0;
   cfg.stream = env_or("SLIM_STREAM", "") == "1";
+  cfg.dry_run_writes = env_or("SLIM_DRY_RUN_WRITES", "") == "1";
   cfg.verbose_http = env_or("SLIM_HTTP_VERBOSE", "") == "1";
   cfg.session = env_or("SLIM_SESSION", "default");
   cfg.history = 6;
@@ -489,6 +459,8 @@ int main(int argc, char** argv) {
       cfg.verbose_http = true;
     else if (a == "--stream")
       cfg.stream = true;
+    else if (a == "--dry-run-writes")
+      cfg.dry_run_writes = true;
     else if (a == "--session")
       need(cfg.session);
     else if (a == "--history") {

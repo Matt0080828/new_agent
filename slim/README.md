@@ -133,6 +133,34 @@ python3 -S slim/agent.py --session boiler --show-history
   escapes non-ASCII (Python's `json.dumps` does by default) does not turn `溫度` into
   `u6eabu5ea6`.
 
+## Tool output budget and the change queue
+
+Two bounds that exist because the smallest client has no room for what the largest one
+tolerates:
+
+- **Tool output is budgeted.** Every successful tool result passes one `ToolBudget` (8 KiB
+  per turn by default). Over the budget it is trimmed with an explicit
+  `[truncated N bytes: tool output budget reached]` marker, and once the budget is gone
+  later results come back as `[tool output omitted: ...]` - so the model learns its tool
+  output was cut instead of silently receiving nothing. Errors are never budgeted: they
+  are short, and they are what the model needs to see.
+- **File changes are queued, not written as they are asked for.** A model-initiated
+  `write_file` is staged, and the queue is applied once when the turn ends, with one audit
+  line per file:
+
+```
+[slim] wrote notes.md (412 bytes)
+[slim] changes: 2 file(s), 900 bytes, 1 overwrite(s) of an earlier staged change
+```
+
+  Last write to the same path wins and that is reported; the queue is capped (16 files,
+  64 KiB) and so is each file (8 KiB), so a loop cannot fill the device in one turn. A
+  failure while applying one file does not discard the others. Protected paths
+  (`sessions/`, `*.sqlite`, dotfiles) are refused at staging time, not at apply time.
+
+The C++ client prints the budget summary and the manifest per turn too, and its
+`--dry-run-writes` flag stages and reports without writing anything at all.
+
 ## Features
 
 - Chat via OpenAI-compatible HTTP; fallback URL on request failure
@@ -173,16 +201,27 @@ make -C slim/cpp test        # tests/test_slim: 70 checks, tests/test_sse: 45 ch
 T830 (OpenWrt musl gcc 9.3):
 
 ```bash
-make -C slim/cpp t830
-file slim/cpp/slim-agent-t830
-# ELF aarch64, interpreter /lib/ld-musl-aarch64.so.1
-# NEEDED: libstdc++.so.6 libgcc_s.so.1 libc.so
+make -C slim/cpp t830          # dynamic, stripped, 117 KB
+make -C slim/cpp t830-static   # self-contained, 694 KB, no NEEDED libs
+file slim/cpp/slim-agent-t830-static
+# ELF aarch64, statically linked, stripped, interpreter-less
 ```
 
-Copy `slim-agent-t830` plus `slim/skills` onto the CPE. Flags: `--base-url`, `--model`,
-`--once`, `--data-dir`, `--max-tokens`, the retry flags `--attempts`, `--retry-base-ms`,
-`--http-verbose`, `--stream`, and the policy flags `--allow-write`, `--allow-mqtt`,
-`--non-interactive` / `--interactive`. The 270M-class local model does
+Two artifacts on purpose. `slim-agent-t830` is the small one and needs
+`libstdc++.so.6`, `libgcc_s.so.1` and `libc.so` on the device - OpenWrt images usually
+have no C++ runtime, and checking for it requires logging into the device.
+`slim-agent-t830-static` links musl and libstdc++ in, so it needs nothing, which is the
+safer default when the device cannot be inspected first. Both are stripped: the unstripped
+build carried debug info and an `RPATH` pointing at the build machine's SDK path.
+
+`-lgcc_eh` must come after the source files on the static link, otherwise the link fails
+with `undefined reference to _Unwind_Resume`.
+
+Copy `slim-agent-t830-static` (or `slim-agent-t830`) plus `slim/skills` onto the CPE. Flags:
+`--base-url`, `--model`, `--once`, `--data-dir`, `--max-tokens`, the retry flags
+`--attempts`, `--retry-base-ms`, `--http-verbose`, `--stream`, `--dry-run-writes`, and the
+policy flags `--allow-write`, `--allow-mqtt`, `--non-interactive` / `--interactive`. The
+270M-class local model does
 not emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write`,
 `/mqtt`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
 `.md`/`.txt` (no SQLite in the C++ client). Not hardware-verified on T830.
