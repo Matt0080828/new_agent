@@ -219,6 +219,23 @@ class TestStreamCompletion(unittest.TestCase):
                               retry_policy=self.policy(), sleep=lambda s: None, opener=opener)
         self.assertEqual(opener.calls, 1)
 
+    def test_error_status_is_reported_and_emits_nothing(self):
+        """A 400 from a streaming endpoint must raise naming the status, and emit nothing.
+
+        The C++ client used to print the raw response (status line, headers and body)
+        and store it as the assistant answer; both clients must instead surface the
+        failure and leave the session untouched.
+        """
+        seen = []
+        opener = FakeOpener([http_error(400, '{"error":{"message":"Failed to load model"}}')])
+        with self.assertRaises(Exception) as ctx:
+            stream_completion("http://x/v1/chat/completions", {"stream": True},
+                              on_delta=seen.append, retry_policy=self.policy(),
+                              sleep=lambda s: None, opener=opener)
+        self.assertIn("HTTP 400", str(ctx.exception))
+        self.assertEqual(seen, [], "a failed request must not emit deltas")
+        self.assertEqual(opener.calls, 1, "a 400 is permanent and is never retried")
+
     def test_transport_error_is_retried(self):
         opener = FakeOpener([urllib.error.URLError("connection refused"),
                              FakeResponse([BODY.encode("utf-8")])])

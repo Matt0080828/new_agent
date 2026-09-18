@@ -307,6 +307,29 @@ static void test_plain_json_request_round_trip() {
   reap_fake_server(pid);
 }
 
+static void test_stream_error_status_is_not_an_answer() {
+  std::cout << "-- http_post_json_stream: an error status must not become the answer\n";
+  std::vector<FakeResponse> resps(1);
+  resps[0].bytes = respond(400, "Bad Request", "Content-Type: application/json\r\n",
+                           "{\"error\":{\"message\":\"Failed to load model \\\"nvidia/nemotron-3-nano-4b\\\"\"}}");
+  int port = 0;
+  int pid = start_fake_server(resps, &port);
+  char url[64];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/v1/chat/completions", port);
+  DeltaCollector c;
+  RetryPolicy p;
+  HttpResult r = http_post_json_stream(url, "{\"stream\":true}", "", 3, p, false, collect_delta, &c);
+  check(r.status == 400, "status 400 surfaced to the caller");
+  check(c.calls == 0, "no delta printed for a failed request");
+  check(r.body.empty(), "the raw response never becomes the body/answer");
+  check(r.error.find("HTTP status 400") != std::string::npos, "error names the status");
+  check(r.error.find("HTTP/1.1") == std::string::npos && r.error.find("X-Powered") == std::string::npos,
+        "error carries no header bytes");
+  check(r.error.find("Failed to load model") != std::string::npos,
+        "error keeps the server message (bounded)");
+  reap_fake_server(pid);
+}
+
 static void test_stream_round_trip() {
   std::cout << "-- http_post_json_stream: deltas and accumulation\n";
   std::string body =
@@ -420,6 +443,7 @@ int main() {
   test_assemble_whole_body();
   test_unicode_escapes_in_a_delta();
   test_plain_json_request_round_trip();
+  test_stream_error_status_is_not_an_answer();
   test_stream_round_trip();
   test_stream_without_done();
   test_stream_server_ignores_stream_flag();
