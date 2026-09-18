@@ -75,9 +75,21 @@ say "artifact: $BIN_LOCAL ($(stat -c%s "$BIN_LOCAL") bytes, sha256 $(sha256sum "
 
 say "pushing the bundle to $REMOTE"
 docker exec "$NAME" adb shell "mkdir -p $REMOTE" >/dev/null
-docker exec "$NAME" adb push "$BIN_LOCAL" "$REMOTE/slim-agent-t830-static" >/dev/null || die "push failed"
-docker exec "$NAME" adb push "$DEPLOY/on-device-smoke.sh" "$REMOTE/on-device-smoke.sh" >/dev/null || die "push failed"
-[ -n "$SKILLS_SRC" ] && { docker exec "$NAME" adb push "$SKILLS_SRC" "$REMOTE/skills" >/dev/null 2>&1 || say "note: skills push failed (optional)"; }
+# adb runs INSIDE the container and cannot read host paths: stage with docker cp,
+# then push from there. A direct host-path push fails with a bare "push failed".
+docker cp "$BIN_LOCAL" "$NAME:/tmp/stage-binary" >/dev/null || die "docker cp of the artifact failed"
+docker exec "$NAME" adb push /tmp/stage-binary "$REMOTE/slim-agent-t830-static" >/dev/null || die "push failed"
+docker cp "$DEPLOY/on-device-smoke.sh" "$NAME:/tmp/stage-smoke" >/dev/null || die "docker cp of the smoke test failed"
+docker exec "$NAME" adb push /tmp/stage-smoke "$REMOTE/on-device-smoke.sh" >/dev/null || die "push failed"
+if [ -n "$SKILLS_SRC" ]; then
+  docker exec "$NAME" adb shell "rm -rf $REMOTE/skills" >/dev/null 2>&1
+  if docker cp "$SKILLS_SRC" "$NAME:/tmp/stage-skills" >/dev/null 2>&1 && \
+     docker exec "$NAME" adb push /tmp/stage-skills "$REMOTE/skills" >/dev/null 2>&1; then
+    say "skills pushed from $SKILLS_SRC"
+  else
+    say "note: skills push failed (optional)"
+  fi
+fi
 docker exec "$NAME" adb shell "chmod +x $REMOTE/slim-agent-t830-static $REMOTE/on-device-smoke.sh"
 
 LOCAL_SUM=$(sha256sum "$BIN_LOCAL" | awk '{print $1}')

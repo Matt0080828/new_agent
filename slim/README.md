@@ -274,10 +274,18 @@ make -C slim/cpp t830-static          # the artifact the script pushes
 By hand, if you would rather see every step (the container from above is running):
 
 ```bash
-docker exec adb-t830-run adb push slim/cpp/slim-agent-t830-static /tmp/slim/slim-agent-t830-static
-docker exec adb-t830-run adb shell chmod +x /tmp/slim/slim-agent-t830-static
-docker exec adb-t830-run adb shell sha256sum /tmp/slim/slim-agent-t830-static   # compare with the host
+mkdir -p /tmp/stage && cp slim/cpp/slim-agent-t830-static /tmp/stage/
+docker cp /tmp/stage/slim-agent-t830-static adb-t830-run:/tmp/stage-binary
+docker exec adb-t830-run adb shell "mkdir -p /tmp/slim"
+docker exec adb-t830-run adb push /tmp/stage-binary /tmp/slim/slim-agent-t830-static
+docker exec adb-t830-run adb shell "chmod +x /tmp/slim/slim-agent-t830-static"
+sha256sum /tmp/stage/slim-agent-t830-static                                     # host side
+docker exec adb-t830-run adb shell sha256sum /tmp/slim/slim-agent-t830-static    # device side
 ```
+
+The `docker cp` in the middle is not decoration: `adb` runs inside the container, so
+`docker exec … adb push <host path>` cannot see the file and fails with a bare
+"push failed" - the trap the paragraph above warns about.
 
 Then, with no model server at all - this is what `on-device-smoke.sh` automates, and it needs
 no network, writes only under its own `/tmp/slim-smoke/data-$$`, and deletes nothing:
@@ -293,7 +301,9 @@ docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --d
 ```
 
 A live turn, with a model server on the LAN (`<host>` = the machine running LM Studio, on the
-CPE's own `br-lan` segment - the verified run used `192.168.1.210:1234`):
+CPE's own `br-lan` segment - the verified run used `192.168.1.210:1234`). The path below is
+where `run-on-t830.sh` leaves the binary (`/tmp/slim-smoke/`); a hand push puts it in
+`/tmp/slim/`.
 
 ```bash
 docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/live \
@@ -307,8 +317,8 @@ docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --d
 That second command is the point of `--history`: it answers `7391` because the first turn was
 replayed; add `--history 0` and it answers something else. Keep the whole run under `/tmp`
 (the image is read-only apart from `/overlay` and `/data`), and `--timeout 420` because a turn
-through a shared LM Studio takes 45-63 s. Clean up with `rm -rf /tmp/slim` when you are done -
-nothing outside that directory is touched.
+through a shared LM Studio takes 45-63 s. Clean up with `rm -rf /tmp/slim /tmp/slim-smoke` (whichever you created) when you are done -
+nothing outside those directories is touched.
 
 Verified on the device (static build, sha256-matched):
 
