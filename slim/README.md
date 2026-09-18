@@ -472,7 +472,38 @@ Both can coexist, since the endpoint is per invocation. For local-first with a L
 hatch, point `--fallback-url` at the other one - verified on the box: with a dead primary
 (port 9999) and the device's server as the fallback, the turn still answered `PONG!` in 3 s,
 while the same call without a fallback failed with `connect failed` and wrote **no** session
-file. To update, push the new
+file.
+
+### Keeping it resident
+
+Omit `--once` and the client becomes a line-oriented resident process: it reads one turn per
+line from stdin and keeps going until an empty line or EOF. No other flag enables it, and
+nothing is lost by restarting - the state that matters (the sessions) is on disk.
+
+```bash
+mkfifo /data/slim/in
+( exec 3>/data/slim/in     # hold the writer open: a plain `echo >fifo` closes it, the reader
+                           # sees EOF and the agent exits after that first line
+  ./slim-agent --data-dir /data/slim/data --session resident --non-interactive \
+    --model qwen2.5-0.5b-instruct --base-url http://127.0.0.1:8080/v1 < /data/slim/in &
+  echo "/rag openwrt" >&3
+  echo "summarise the last alert" >&3
+) &
+```
+
+Verified on the box with the local `llama-server` up: a line fed through the FIFO was answered
+inside the loop (`PONG!`), `/history` worked from the same process, and it exited cleanly when
+the writer closed.
+
+Two things this is not. It is not a network service - there is no listen mode, no subscription
+and no HTTP endpoint; stdin is the only input - and it keeps nothing in memory that a restart
+would lose. What is worth keeping resident is the **model** (`llama-server`), because loading it
+is the slow part; the agent itself starts in `real 0m 0.00s`, so one-shot invocations cost
+nothing.
+
+OpenWrt's `procd` is init here (pid 1, 92 scripts in `/etc/init.d`), so either process can be
+supervised across reboots with an init script, but nothing is installed by default - run the
+agent from your own wrapper when you need it. To update, push the new
 binary over `/data/slim/slim-agent` after comparing its sha256, and leave the data directory
 alone - that is where the sessions are.
 
