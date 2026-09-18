@@ -408,7 +408,20 @@ chmod +x /data/slim/run
 ```
 
 Adding `--allow-write` to that call is the only way the model may write, and even then never to
-the session store, any `*.sqlite`, or outside the data directory. To update, push the new
+the session store, any `*.sqlite`, or outside the data directory. The corpus is just files:
+`--skills-dir` and `--docs-dir` are scanned for `.md`/`.txt`, and `/rag` searches them.
+
+```bash
+# same staging rule as the binary: docker cp into the container, adb push onto the device
+docker cp ./cpe-notes.md adb-t830-run:/tmp/cpe-notes.md
+docker exec adb-t830-run adb push /tmp/cpe-notes.md /data/slim/docs/cpe-notes.md
+docker exec adb-t830-run adb shell '/data/slim/run --once "/rag openwrt"'
+# [{"path":"doc/openwrt.md","snippet":"vice runs OpenWrt 23.05.5 with a musl aarch64 userland..."}]
+```
+
+A hit names its source (`doc/...` for `--docs-dir`, `skill/...` for `--skills-dir`, `data/...`
+for the data directory itself), so an empty corpus answers with an empty list rather than an
+error. To update, push the new
 binary over `/data/slim/slim-agent` after comparing its sha256, and leave the data directory
 alone - that is where the sessions are.
 
