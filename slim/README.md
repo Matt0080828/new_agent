@@ -421,7 +421,58 @@ docker exec adb-t830-run adb shell '/data/slim/run --once "/rag openwrt"'
 
 A hit names its source (`doc/...` for `--docs-dir`, `skill/...` for `--skills-dir`, `data/...`
 for the data directory itself), so an empty corpus answers with an empty list rather than an
-error. To update, push the new
+error.
+
+### When the model runs on the T830 itself (llama.cpp)
+
+Nothing special is required: the agent only knows an OpenAI-compatible endpoint, so a
+`llama-server` on the device is one flag away - `--base-url http://127.0.0.1:8080/v1` - and
+everything else (sessions, slash commands, the policy, retries) behaves as it does against a
+server on the LAN. This was run on the box.
+
+The cross-built server needs exactly `libstdc++.so.6`, `libgcc_s.so.1` and musl `libc`, all
+present in the image (no `libgomp`), so it starts as-is. A model that fits: `/data` has 12.5 GB
+free, and after loading `Qwen2.5-0.5B-Instruct-Q4_K_M` (469 MB) the server held 646 MB RSS with
+about 1.1 GB of the 1.7 GB still available - anything much larger than 1B will not fit.
+
+```bash
+# host: stage through the container (adb cannot read host paths), then push
+docker cp /media/matt/D/llama.cpp/build-openwrt-t830/bin/llama-server adb-t830-run:/tmp/llama-server
+docker cp ~/models/qwen2.5-0.5b-instruct-q4_k_m.gguf adb-t830-run:/tmp/model.gguf
+docker exec adb-t830-run adb shell 'mkdir -p /data/slim/models'
+docker exec adb-t830-run adb push /tmp/llama-server /data/slim/llama-server
+docker exec adb-t830-run adb push /tmp/model.gguf /data/slim/models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+docker exec adb-t830-run adb shell 'chmod +x /data/slim/llama-server
+  sha256sum /data/slim/llama-server /data/slim/models/*.gguf'   # 469 MB took 47 s over adb
+
+# device: start it on loopback. There is no service entry - it runs on demand, and stops
+# with the shell that started it or with `kill $(pidof llama-server)`.
+docker exec adb-t830-run adb shell 'cd /data/slim && nohup ./llama-server \
+  -m models/qwen2.5-0.5b-instruct-q4_k_m.gguf --host 127.0.0.1 --port 8080 -c 2048 -t 4 \
+  > llama-server.log 2>&1 &'
+# its log then says: listening on http://127.0.0.1:8080
+
+# agent against it - the endpoint is the only change
+docker exec adb-t830-run adb shell 'cd /data/slim && ./slim-agent --data-dir /data/slim/data \
+  --session local --non-interactive --model qwen2.5-0.5b-instruct \
+  --base-url http://127.0.0.1:8080/v1 --stream --once "Reply with one word: pong"'
+# PONG!   (4 s; /history afterwards replayed those turns from /data/slim/data/sessions/local.jsonl)
+```
+
+Measured on the box with `-t 4`: 12 tok/s prompt eval and 7.9 tok/s generation, so a short
+answer takes ~4 s; `n_ctx_slot` was 2048 as requested. It also works through the wrapper from
+the install section - change its `BASE` to `http://127.0.0.1:8080/v1` and nothing else.
+
+Two things to expect from a model this size: answers are weaker than the 7B on the LAN, and it
+will not emit reliable tool JSON, so drive it with the slash commands (`/rag`, `/read`,
+`/write`, `/mqtt`, `/history`) - `--max-tokens` defaults to 64 for exactly that reason. Keep
+the LAN endpoint when the answer quality matters.
+
+Both can coexist, since the endpoint is per invocation. For local-first with a LAN escape
+hatch, point `--fallback-url` at the other one - verified on the box: with a dead primary
+(port 9999) and the device's server as the fallback, the turn still answered `PONG!` in 3 s,
+while the same call without a fallback failed with `connect failed` and wrote **no** session
+file. To update, push the new
 binary over `/data/slim/slim-agent` after comparing its sha256, and leave the data directory
 alone - that is where the sessions are.
 
