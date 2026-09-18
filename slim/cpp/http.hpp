@@ -46,4 +46,17 @@ HttpResult http_post_json_retry(const std::string& url, const std::string& json,
                                 const std::string& bearer, int timeout_sec,
                                 const RetryPolicy& policy, bool verbose);
 
+// Streaming request: the response is read as server-sent events and every content
+// delta is handed to on_delta as it arrives. out->body ends up holding the
+// assembled text. Retry applies only before the first delta reaches on_delta:
+// once output has been shown, a retry would silently restart generation, so a
+// mid-stream failure is final. A stream that ends without [DONE] keeps its text
+// but reports it in out->error.
+typedef void (*DeltaFn)(void* ctx, const std::string& delta);
+
+HttpResult http_post_json_stream(const std::string& url, const std::string& json,
+                                 const std::string& bearer, int timeout_sec,
+                                 const RetryPolicy& policy, bool verbose,
+                                 DeltaFn on_delta, void* ctx);
+
 #endif

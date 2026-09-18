@@ -1,5 +1,8 @@
 #include "http.hpp"
 #include "policy.hpp"
+#include "session.hpp"
+#include "sse.hpp"
+#include "tools.hpp"
 #include "util.hpp"
 
 #include <cstdlib>
@@ -11,7 +14,6 @@
 #include <unistd.h>
 #include <vector>
 
-static const size_t kMaxWrite = 8 * 1024;
 static const size_t kMaxPrompt = 6000;
 
 struct Cfg {
@@ -29,6 +31,11 @@ struct Cfg {
   Policy policy;
   RetryPolicy retry;
   bool verbose_http;
+  bool stream;
+  std::string session;       // --session NAME / SLIM_SESSION
+  std::string session_file;  // <data_dir>/sessions/<name>.jsonl
+  int history;               // --history N: how many turns to replay into the prompt
+  bool dry_run_writes;       // --dry-run-writes: report planned writes, write nothing
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -41,10 +48,16 @@ static std::string env_or(const char* k, const std::string& d) {
   return v && v[0] ? std::string(v) : d;
 }
 
+static void print_delta(void* ctx, const std::string& delta) {
+  (void)ctx;
+  std::cout << delta << std::flush;  // live output: the point of streaming on a slow CPE
+}
+
 static std::string openai_chat(const Cfg& cfg, const std::string& url, const std::string& model,
                                const std::vector<std::pair<std::string, std::string> >& msgs) {
   std::ostringstream js;
-  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":false,\"temperature\":0"
+  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":"
+     << (cfg.stream ? "true" : "false") << ",\"temperature\":0"
      << ",\"max_tokens\":" << cfg.max_tokens
      << ",\"stop\":[\"\\nuser\",\"\\nassistant\",\"\\nmodel\",\"<start_of_turn>\",\"\\n- No\"]"
      << ",\"messages\":[";
@@ -56,18 +69,39 @@ static std::string openai_chat(const Cfg& cfg, const std::string& url, const std
   }
   js << "]}";
   std::string endpoint = join_url(url, "/chat/completions");
-  // Retried: a completion request has no lasting server-side effect, so repeating
-  // it after a transport error or a 5xx is safe. Mutations are never retried (see
-  // the mqtt_publish branch of run_tool).
-  HttpResult r = http_post_json_retry(endpoint, js.str(), cfg.api_key, cfg.timeout,
-                                      cfg.retry, cfg.verbose_http);
+  HttpResult r;
+  if (cfg.stream) {
+    // Deltas go straight to stdout as they arrive; the assembled text comes back
+    // in r.body. Retry applies only before the first delta (see http.hpp).
+    r = http_post_json_stream(endpoint, js.str(), cfg.api_key, cfg.timeout, cfg.retry,
+                              cfg.verbose_http, print_delta, 0);
+    if (!r.error.empty())
+      std::cerr << "\n[slim] stream: " << r.error << "\n";
+  } else {
+    // Retried: a completion request has no lasting server-side effect, so repeating
+    // it after a transport error or a 5xx is safe.
+    r = http_post_json_retry(endpoint, js.str(), cfg.api_key, cfg.timeout, cfg.retry,
+                             cfg.verbose_http);
+  }
   if (!r.error.empty() && r.body.empty())
     throw std::runtime_error(r.error);
   if (r.status && (r.status < 200 || r.status >= 300) && r.body.empty())
     throw std::runtime_error(r.error.empty() ? "http error" : r.error);
   std::string content;
-  if (!json_extract_string(r.body, "content", content))
-    throw std::runtime_error(r.error.empty() ? "no content in response" : r.error + " " + r.body.substr(0, 200));
+  if (cfg.stream) {
+    content = r.body;
+    if (content.empty())
+      throw std::runtime_error(r.error.empty() ? "empty stream" : r.error);
+  } else {
+    // Some servers answer with an event stream even when stream was not requested;
+    // a plain "first content" extraction would then return only the first delta,
+    // so prefer assembling the data lines when the body carries any.
+    std::string assembled;
+    if (r.body.find("data:") != std::string::npos && sse_assemble(r.body, assembled))
+      content = assembled;
+    else if (!json_extract_string(r.body, "content", content))
+      throw std::runtime_error(r.error.empty() ? "no content in response" : r.error + " " + r.body.substr(0, 200));
+  }
   return content;
 }
 
@@ -186,81 +220,31 @@ static std::string sanitize_reply(std::string s) {
   return out;
 }
 
-static void audit_tool(const std::string& tool, const std::string& detail, bool allowed,
-                        const std::string& why) {
-  std::cerr << "[slim] tool " << tool << " (" << detail << ") -> "
-            << (allowed ? "allow" : "deny") << ": " << why << "\\n";
+// The RAG index lives here (the agent owns the directories); the tool layer takes it as
+// an injected function so it stays testable without argv.
+static std::string agent_rag(void* ctx, const std::string& q) {
+  const Cfg* cfg = static_cast<const Cfg*>(ctx);
+  std::vector<Hit> hits = rag_search(*cfg, q, 3);
+  std::ostringstream o;
+  o << "[";
+  for (size_t i = 0; i < hits.size(); ++i) {
+    if (i)
+      o << ",";
+    o << "{\"path\":\"" << json_escape(hits[i].path) << "\",\"snippet\":\""
+      << json_escape(hits[i].snippet) << "\"}";
+  }
+  o << "]";
+  return o.str();
 }
 
-// human_initiated defaults to false on purpose: a call site that forgets to say
-// who asked gets the fail-closed answer.
-static std::string run_tool(const Cfg& cfg, const std::string& name, const std::string& obj,
-                            bool human_initiated = false) {
-  if (name == "rag_search") {
-    std::string q;
-    json_get_string_field(obj, "query", q);
-    std::vector<Hit> hits = rag_search(cfg, q, 3);
-    std::ostringstream o;
-    o << "[";
-    for (size_t i = 0; i < hits.size(); ++i) {
-      if (i)
-        o << ",";
-      o << "{\"path\":\"" << json_escape(hits[i].path) << "\",\"snippet\":\"" << json_escape(hits[i].snippet)
-        << "\"}";
-    }
-    o << "]";
-    return o.str();
-  }
-  if (name == "read_file") {
-    std::string rel, full, err;
-    json_get_string_field(obj, "path", rel);
-    if (!jail_path(cfg.data_dir, rel, full, err))
-      return "tool error: " + err;
-    std::string body = read_file_limited(full, 16 * 1024);
-    if (body.empty())
-      return "tool error: empty or missing";
-    return body;
-  }
-  if (name == "write_file") {
-    std::string rel, content, full, err, why;
-    json_get_string_field(obj, "path", rel);
-    json_get_string_field(obj, "content", content);
-    if (!jail_path(cfg.data_dir, rel, full, err))
-      return "tool error: " + err;
-    if (protected_path(rel, why)) {
-      audit_tool(name, rel, false, why);
-      return "tool error: " + why;
-    }
-    if (!approve_mutation(cfg.policy, name, rel, human_initiated, why)) {
-      audit_tool(name, rel, false, why);
-      return "tool error: " + why;
-    }
-    audit_tool(name, rel, true, why);
-    if (!write_file_limited(full, content, kMaxWrite, err))
-      return "tool error: " + err;
-    return "wrote " + rel;
-  }
-  if (name == "mqtt_publish") {
-    if (cfg.mqtt_http.empty())
-      return "tool error: mqtt disabled; set SLIM_MQTT_HTTP";
-    std::string topic, payload, why;
-    json_get_string_field(obj, "topic", topic);
-    json_get_string_field(obj, "payload", payload);
-    if (!approve_mutation(cfg.policy, name, topic, human_initiated, why)) {
-      audit_tool(name, topic, false, why);
-      return "tool error: " + why;
-    }
-    audit_tool(name, topic, true, why);
-    std::ostringstream js;
-    js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
-    // Deliberately single-shot: a publish is a mutation, and a retry after an
-    // ambiguous failure can duplicate the effect.
-    HttpResult r = http_post_json(cfg.mqtt_http, js.str(), "", 10);
-    if (!r.error.empty() && r.status == 0)
-      return "tool error: " + r.error;
-    return "mqtt http " + r.body.substr(0, 200);
-  }
-  return "tool error: unknown tool";
+static ToolEnv tool_env_from(const Cfg& cfg) {
+  ToolEnv env;
+  env.data_dir = cfg.data_dir;
+  env.mqtt_http = cfg.mqtt_http;
+  env.policy = cfg.policy;
+  env.rag_fn = &agent_rag;
+  env.rag_ctx = const_cast<Cfg*>(&cfg);
+  return env;
 }
 
 static std::string first_word(const std::string& s, std::string& rest) {
@@ -278,32 +262,69 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
   std::string rest;
   std::string cmd = first_word(line, rest);
   if (cmd == "/help" || cmd == "/h")
-    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\nplain text goes to the LLM";
+    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\n/history\nplain text goes to the LLM";
+  if (cmd == "/history" || cmd == "/hist") {
+    std::vector<Turn> turns = session_load(cfg.session_file, cfg.history);
+    if (turns.empty())
+      return "no turns recorded yet in " + cfg.session_file;
+    std::ostringstream out;
+    for (size_t i = 0; i < turns.size(); ++i)
+      out << turns[i].ts << "  " << turns[i].role << ": " << turns[i].text << "\n";
+    out << "(" << turns.size() << " turn(s) from " << cfg.session_file << ")";
+    return out.str();
+  }
   if (cmd == "/rag") {
     std::ostringstream js;
     js << "{\"query\":\"" << json_escape(rest) << "\"}";
-    return run_tool(cfg, "rag_search", js.str(), true);
+    return run_tool(tool_env_from(cfg), "rag_search", js.str(), true, 0, 0);
   }
   if (cmd == "/read") {
     std::ostringstream js;
     js << "{\"path\":\"" << json_escape(rest) << "\"}";
-    return run_tool(cfg, "read_file", js.str(), true);
+    return run_tool(tool_env_from(cfg), "read_file", js.str(), true, 0, 0);
   }
   if (cmd == "/write") {
     std::string path, content;
     path = first_word(rest, content);
     std::ostringstream js;
     js << "{\"path\":\"" << json_escape(path) << "\",\"content\":\"" << json_escape(content) << "\"}";
-    return run_tool(cfg, "write_file", js.str(), true);
+    if (cfg.dry_run_writes) {
+      // Stage instead of writing and report what would have changed. Nothing is written
+      // in this mode, which is the point of having it on a device you cannot easily
+      // recover.
+      std::string full, err, why;
+      if (!jail_path(cfg.data_dir, path, full, err))
+        return "tool error: " + err;
+      if (protected_path(path, why))
+        return "tool error: " + why;
+      ChangeQueue planned;
+      if (!planned.stage(path, full, content, why))
+        return "tool error: " + why;
+      std::ostringstream msg;
+      msg << "dry run: " << planned.summary() << "\nwould write " << path << " ("
+          << content.size() << " bytes)";
+      return msg.str();
+    }
+    return run_tool(tool_env_from(cfg), "write_file", js.str(), true, 0, 0);
   }
   if (cmd == "/mqtt") {
     std::string topic, payload;
     topic = first_word(rest, payload);
     std::ostringstream js;
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
-    return run_tool(cfg, "mqtt_publish", js.str(), true);
+    return run_tool(tool_env_from(cfg), "mqtt_publish", js.str(), true, 0, 0);
   }
   return "unknown command; /help";
+}
+
+// A failing session store must be visible, but it must not kill the turn: losing
+// history is bad, losing the answer the operator asked for is worse.
+static void record_turn(const Cfg& cfg, const std::string& role, const std::string& text) {
+  if (cfg.session_file.empty())
+    return;
+  std::string why;
+  if (!session_append(cfg.session_file, role, text, why))
+    std::cerr << "[slim] session: " << why << "\n";
 }
 
 static std::string run_turn(const Cfg& cfg, const std::string& user) {
@@ -313,18 +334,42 @@ static std::string run_turn(const Cfg& cfg, const std::string& user) {
   if (cfg.base_url.empty() || cfg.model.empty())
     throw std::runtime_error("set --base-url and --model, or use /rag /read /write");
   std::vector<std::pair<std::string, std::string> > msgs;
+  // Replay the session first: that is what makes a session resumable after a reboot,
+  // rather than a log nobody reads.
+  std::vector<Turn> history = session_load(cfg.session_file, cfg.history);
+  for (size_t i = 0; i < history.size(); ++i)
+    msgs.push_back(std::make_pair(history[i].role == "assistant" ? std::string("assistant")
+                                                                : std::string("user"),
+                                  history[i].text));
   msgs.push_back(std::make_pair(std::string("user"),
                                 std::string("Q: ") + cap_prompt(u, kMaxPrompt) + "\nA:"));
-  return sanitize_reply(chat_fallback(cfg, msgs));
+  std::string reply = chat_fallback(cfg, msgs);
+  record_turn(cfg, "user", u);
+  record_turn(cfg, "assistant", reply);
+  if (cfg.stream)
+    return std::string();  // the deltas were already printed live
+  return sanitize_reply(reply);
+}
+
+static void print_reply(const Cfg& cfg, const std::string& out, bool slash_command) {
+  // With --stream the deltas have already been written, so only the trailing
+  // newline is left. Slash commands never stream and print as usual.
+  if (cfg.stream && !slash_command)
+    std::cout << "\n";
+  else
+    std::cout << out << "\n";
 }
 
 static void usage() {
   std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
+            << "  stream: --stream prints tokens as they arrive (SLIM_STREAM=1)\n"
+            << "  session: --session NAME --history N (default 6; 0 replays nothing, -1 all)\n"
             << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
             << "         retries transport errors, 429 and 5xx; mutations are never retried\n"
             << "  policy: model-initiated writes/publishes are denied unless enabled\n"
+            << "  writes: --dry-run-writes reports what /write would change and writes nothing\n"
             << "          --allow-write / --allow-mqtt (or SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1)\n"
             << "          state files (*.sqlite, *.db, dotfiles) are never writable\n"
             << "          --non-interactive turns off the approval prompt (deny by default)\n"
@@ -353,7 +398,16 @@ int main(int argc, char** argv) {
   cfg.policy.allow_write = env_or("SLIM_ALLOW_WRITE", "") == "1";
   cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
   cfg.policy.interactive = isatty(0) != 0;
+  cfg.stream = env_or("SLIM_STREAM", "") == "1";
+  cfg.dry_run_writes = env_or("SLIM_DRY_RUN_WRITES", "") == "1";
   cfg.verbose_http = env_or("SLIM_HTTP_VERBOSE", "") == "1";
+  cfg.session = env_or("SLIM_SESSION", "default");
+  cfg.history = 6;
+  {
+    std::string h = env_or("SLIM_HISTORY", "");
+    if (!h.empty())
+      cfg.history = atoi(h.c_str());
+  }
   {
     std::string a = env_or("SLIM_ATTEMPTS", "");
     if (!a.empty())
@@ -403,7 +457,17 @@ int main(int argc, char** argv) {
       cfg.retry.base_delay_ms = atoi(v.c_str());
     } else if (a == "--http-verbose")
       cfg.verbose_http = true;
-    else if (a == "--allow-write")
+    else if (a == "--stream")
+      cfg.stream = true;
+    else if (a == "--dry-run-writes")
+      cfg.dry_run_writes = true;
+    else if (a == "--session")
+      need(cfg.session);
+    else if (a == "--history") {
+      std::string v;
+      need(v);
+      cfg.history = atoi(v.c_str());
+    } else if (a == "--allow-write")
       cfg.policy.allow_write = true;
     else if (a == "--allow-mqtt")
       cfg.policy.allow_mqtt = true;
@@ -422,6 +486,12 @@ int main(int argc, char** argv) {
       die("unknown arg " + a);
   }
   mkdir(cfg.data_dir.c_str(), 0755);
+  {
+    std::string why;
+    if (!valid_session_name(cfg.session, why))
+      die("bad --session: " + why, 2);
+    cfg.session_file = session_path(cfg.data_dir, cfg.session);
+  }
   if (ingest_only) {
     std::vector<std::pair<std::string, std::string> > files;
     list_text_files(cfg.skills_dir, "skill", files);
@@ -437,7 +507,7 @@ int main(int argc, char** argv) {
   }
   try {
     if (!once.empty()) {
-      std::cout << run_turn(cfg, once) << "\n";
+      print_reply(cfg, run_turn(cfg, once), once_slash);
       return 0;
     }
     std::cerr << "slash: /rag /read /write /help. empty line or Ctrl-D to quit.\n";
@@ -445,7 +515,7 @@ int main(int argc, char** argv) {
     while (std::getline(std::cin, line)) {
       if (line.empty())
         break;
-      std::cout << run_turn(cfg, line) << "\n";
+      print_reply(cfg, run_turn(cfg, line), !line.empty() && line[0] == '/');
     }
   } catch (const std::exception& e) {
     die(e.what(), 1);

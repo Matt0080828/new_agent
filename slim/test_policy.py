@@ -36,6 +36,13 @@ class ProtectedPathTests(unittest.TestCase):
         self.assertIsNotNone(policy.protected_path(".hidden"))
         self.assertIsNotNone(policy.protected_path("slim-agent"))
 
+    def test_session_store_protected(self):
+        # The session store is append-only agent state and lives inside the write jail.
+        for rel in ("sessions/default.jsonl", "sessions", "sub/sessions/x.jsonl"):
+            self.assertIsNotNone(policy.protected_path(rel), rel)
+        self.assertIsNone(policy.protected_path("my-sessions.md"))
+        self.assertIsNone(policy.protected_path("notes.jsonl"))
+
     def test_empty_name(self):
         self.assertIsNotNone(policy.protected_path(""))
         self.assertIsNotNone(policy.protected_path("sub/"))

@@ -20,8 +20,11 @@ from error import SlimError
 from policy import approve_tool
 from retry import DEFAULT_ATTEMPTS, DEFAULT_BASE_DELAY, DEFAULT_MAX_TOTAL, run_with_retry
 from rag import connect, ingest_tree, log_turn, search
+from session import session_append, session_load, session_path, valid_session_name
 from skills import format_skills, load_skills
-from tools import TOOLS, parse_tool_call, run_tool
+from sse import assemble
+from stream import stream_completion
+from tools import TOOLS, ChangeQueue, ToolBudget, parse_tool_call, run_tool
 
 DEFAULT_MAX_TOKENS = 256
 DEFAULT_TIMEOUT = 120
@@ -40,6 +43,42 @@ def _retry_log(line):
     sys.stderr.write(line + "\n")
 
 
+def _record_turn(cfg, role, text):
+    """Append one turn to the session store. A failing store is reported but never
+    kills the turn: losing history is bad, losing the answer that was asked for is
+    worse."""
+    path = cfg.get("session_file")
+    if not path:
+        return
+    ok, why = session_append(path, role, text)
+    if not ok:
+        sys.stderr.write("[slim] session: %s\n" % why)
+
+
+def _apply_changes(queue, budget):
+    """Write what the turn staged and report it. This is the operator's audit line: a model
+    that asked for five writes must be visible as five lines, not as silence."""
+    if budget.used or budget.elided:
+        sys.stderr.write("[slim] %s\n" % budget.summary())
+    if not queue.entries:
+        return
+    wrote, failures = queue.apply()
+    for line in wrote:
+        sys.stderr.write("[slim] %s\n" % line)
+    for line in failures:
+        sys.stderr.write("[slim] change failed: %s\n" % line)
+    sys.stderr.write("[slim] changes: %s\n" % queue.summary())
+
+
+def _stream_to_stdout():
+    """Write each delta straight to stdout, unbuffered: that is the point of
+    streaming on a slow CPE."""
+    def emit(text):
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    return emit
+
+
 def _post_once(url, data, headers, timeout):
     """One HTTP attempt. Raises the transport exception unchanged so the retry
     policy can classify it, rather than wrapping it in SlimError first."""
@@ -52,7 +91,8 @@ def _post_once(url, data, headers, timeout):
 
 
 def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_MAX_TOKENS,
-                    timeout=DEFAULT_TIMEOUT, retry_policy=None, log=None):
+                    timeout=DEFAULT_TIMEOUT, retry_policy=None, log=None, stream=False,
+                    on_delta=None):
     base = base_url.rstrip("/")
     if base.endswith("/v1"):
         url = base + "/chat/completions"
@@ -62,16 +102,26 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
         "model": model,
         "messages": messages,
         "max_tokens": int(max_tokens),
-        "stream": False,
+        "stream": bool(stream),
     }
     data = json.dumps(payload).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
         "Content-Length": str(len(data)),
     }
     if api_key:
         headers["Authorization"] = "Bearer " + api_key
+    if stream:
+        # Deltas reach on_delta as they arrive; the assembled text comes back here.
+        result = stream_completion(url, payload, api_key=api_key, headers=headers,
+                                   timeout=timeout, on_delta=on_delta,
+                                   retry_policy=retry_policy, log=log)
+        if result.error:
+            sys.stderr.write("[slim] stream: %s\n" % result.error)
+        if not result.text:
+            raise SlimError(result.error or "empty stream", 1)
+        return result.text
     # Retried: a completion request has no lasting server-side effect, so repeating
     # it after a transport error, a 429 or a 5xx is safe. Mutations are never
     # retried (see the mqtt_publish branch of tools.run_tool).
@@ -97,6 +147,12 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
     try:
         obj = json.loads(raw.decode("utf-8"))
     except ValueError as exc:
+        # A server may answer with an event stream even when stream was not
+        # requested; assembling the data lines beats failing on the JSON parse
+        # (and returns the whole reply, not just its first delta).
+        text = assemble(raw.decode("utf-8", "replace"))
+        if text:
+            return text
         raise SlimError("invalid JSON: %s" % exc, 1)
     choices = obj.get("choices") or []
     if not choices:
@@ -109,17 +165,19 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
 
 
 def complete_with_fallback(primary, fallback, model, fallback_model, messages, api_key, max_tokens,
-                           timeout, retry_policy=None, log=None):
+                           timeout, retry_policy=None, log=None, stream=False, on_delta=None):
     # Each provider gets its own retry budget, so a fallback after an unreachable
     # primary is still attempted with the same transport policy.
     try:
         return chat_completion(primary, model, messages, api_key, max_tokens, timeout,
-                               retry_policy=retry_policy, log=log)
+                               retry_policy=retry_policy, log=log, stream=stream,
+                               on_delta=on_delta)
     except SlimError:
         if not fallback:
             raise
         return chat_completion(fallback, fallback_model or model, messages, api_key, max_tokens,
-                               timeout, retry_policy=retry_policy, log=log)
+                               timeout, retry_policy=retry_policy, log=log, stream=stream,
+                               on_delta=on_delta)
 
 
 def _trim(messages):
@@ -150,11 +208,16 @@ def system_prompt(skill_text):
 
 def run_turn(user_text, cfg, conn):
     rlog = _retry_log if cfg.get("http_verbose") else None
+    streaming = bool(cfg.get("stream"))
+    emit = _stream_to_stdout() if streaming else None
     skills = load_skills(cfg["skills_dir"])
-    messages = [
-        {"role": "system", "content": system_prompt(format_skills(skills))},
-        {"role": "user", "content": user_text},
-    ]
+    messages = [{"role": "system", "content": system_prompt(format_skills(skills))}]
+    # Replay the stored session first: that is what makes it resumable rather than a
+    # log nobody reads.
+    for turn in session_load(cfg.get("session_file", ""), cfg.get("history", 0)):
+        messages.append({"role": "assistant" if turn["role"] == "assistant" else "user",
+                         "content": turn["text"]})
+    messages.append({"role": "user", "content": user_text})
     hits = search(conn, user_text, limit=3)
     if hits:
         blob = json.dumps(hits, ensure_ascii=False)
@@ -171,8 +234,12 @@ def run_turn(user_text, cfg, conn):
         cfg["timeout"],
         retry_policy=cfg.get("retry") or {},
         log=rlog,
+        stream=streaming,
+        on_delta=emit,
     )
     parsed = parse_tool_call(reply)
+    budget = ToolBudget()
+    queue = ChangeQueue()
     if parsed:
         name, args = parsed
         detail = args.get("path") or args.get("topic") or ""
@@ -181,7 +248,8 @@ def run_turn(user_text, cfg, conn):
                          % (name, detail, "allow" if ok else "deny", reason))
         if ok:
             try:
-                result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "")
+                result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "",
+                                  queue=queue, budget=budget)
             except (ValueError, OSError) as exc:
                 result = "tool error: %s" % exc
         else:
@@ -200,10 +268,17 @@ def run_turn(user_text, cfg, conn):
             cfg["timeout"],
             retry_policy=cfg.get("retry") or {},
             log=rlog,
+            stream=streaming,
+            on_delta=emit,
         )
+    _apply_changes(queue, budget)
     log_turn(conn, "user", user_text)
     log_turn(conn, "assistant", reply)
-    return reply
+    _record_turn(cfg, "user", user_text)
+    _record_turn(cfg, "assistant", reply)
+    # With streaming the deltas were already written to stdout, so the caller must
+    # not print the text a second time.
+    return "" if streaming else reply
 
 
 def _load_config(path):
@@ -244,6 +319,15 @@ def _parse_args(argv):
     p.add_argument("--http-verbose", action="store_true",
                    default=os.environ.get("SLIM_HTTP_VERBOSE", "") == "1",
                    help="log every transport attempt to stderr")
+    p.add_argument("--stream", action="store_true",
+                   default=os.environ.get("SLIM_STREAM", "") == "1",
+                   help="print tokens as they arrive (SSE); retry stops once output was shown")
+    p.add_argument("--session", default=os.environ.get("SLIM_SESSION", "default"),
+                   help="session name; turns go to <data-dir>/sessions/<name>.jsonl")
+    p.add_argument("--history", type=int, default=int(os.environ.get("SLIM_HISTORY", 6)),
+                   help="how many stored turns to replay into the prompt (default 6)")
+    p.add_argument("--show-history", action="store_true",
+                   help="print the stored turns for this session and exit")
     p.add_argument("--once", default="", help="single prompt then exit")
     p.add_argument("--ingest-only", action="store_true")
     return p.parse_args(argv)
@@ -278,12 +362,20 @@ def build_cfg(args):
             "interactive": (not args.non_interactive) and sys.stdin.isatty(),
         },
         "http_verbose": bool(args.http_verbose or file_cfg.get("http_verbose")),
+        "stream": bool(args.stream or file_cfg.get("stream")),
+        "session": str(args.session or file_cfg.get("session") or "default"),
+        "history": max(0, int(args.history)),
         "retry": {
             "attempts": max(1, int(args.attempts)),
             "base_delay": max(0.0, args.retry_base_ms / 1000.0),
             "max_total": float(os.environ.get("SLIM_RETRY_MAX_TOTAL_S", 20.0)),
         },
     }
+    # The session name becomes a file name: validate before it is used, fail closed.
+    ok, why = valid_session_name(cfg["session"])
+    if not ok:
+        _die("bad --session: %s" % why)
+    cfg["session_file"] = session_path(data_dir, cfg["session"])
     return cfg
 
 
@@ -298,6 +390,13 @@ def main(argv=None):
     ingest_tree(conn, cfg["data_dir"], prefix="data")
     if args.ingest_only:
         print("ingested into %s" % cfg["db"])
+        return 0
+    if args.show_history:
+        turns = session_load(cfg["session_file"], cfg["history"])
+        if not turns:
+            print("no turns recorded yet in %s" % cfg["session_file"])
+        for turn in turns:
+            print("%s  %s: %s" % (turn["ts"], turn["role"], turn["text"]))
         return 0
     if not cfg["base_url"]:
         _die("set --base-url or SLIM_BASE_URL")
