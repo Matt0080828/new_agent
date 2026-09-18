@@ -18,6 +18,7 @@ if HERE not in sys.path:
 
 from error import SlimError
 from policy import approve_tool
+from retry import DEFAULT_ATTEMPTS, DEFAULT_BASE_DELAY, DEFAULT_MAX_TOTAL, run_with_retry
 from rag import connect, ingest_tree, log_turn, search
 from skills import format_skills, load_skills
 from tools import TOOLS, parse_tool_call, run_tool
@@ -34,7 +35,24 @@ def _die(msg, code=2):
     sys.exit(code)
 
 
-def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_MAX_TOKENS, timeout=DEFAULT_TIMEOUT):
+def _retry_log(line):
+    """Audit line for each transport attempt (stderr, one per line)."""
+    sys.stderr.write(line + "\n")
+
+
+def _post_once(url, data, headers, timeout):
+    """One HTTP attempt. Raises the transport exception unchanged so the retry
+    policy can classify it, rather than wrapping it in SlimError first."""
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    resp = urllib.request.urlopen(req, timeout=timeout)
+    try:
+        return resp.read(MAX_BODY + 1)
+    finally:
+        resp.close()
+
+
+def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_MAX_TOKENS,
+                    timeout=DEFAULT_TIMEOUT, retry_policy=None, log=None):
     base = base_url.rstrip("/")
     if base.endswith("/v1"):
         url = base + "/chat/completions"
@@ -54,16 +72,23 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
     }
     if api_key:
         headers["Authorization"] = "Bearer " + api_key
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    raw = b""
+    # Retried: a completion request has no lasting server-side effect, so repeating
+    # it after a transport error, a 429 or a 5xx is safe. Mutations are never
+    # retried (see the mqtt_publish branch of tools.run_tool).
+    policy = retry_policy or {}
     try:
-        resp = urllib.request.urlopen(req, timeout=timeout)
-        try:
-            raw = resp.read(MAX_BODY + 1)
-        finally:
-            resp.close()
+        raw = run_with_retry(
+            lambda: _post_once(url, data, headers, timeout),
+            attempts=policy.get("attempts", DEFAULT_ATTEMPTS),
+            base_delay=policy.get("base_delay", DEFAULT_BASE_DELAY),
+            max_total=policy.get("max_total", DEFAULT_MAX_TOTAL),
+            log=log,
+        )
     except urllib.error.HTTPError as exc:
-        body = exc.read(MAX_BODY)
+        try:
+            body = exc.read(MAX_BODY)
+        except Exception:
+            body = b""
         raise SlimError("HTTP %s from %s: %s" % (exc.code, url, body[:500].decode("utf-8", "replace")), 1)
     except urllib.error.URLError as exc:
         raise SlimError("request failed: %s" % exc.reason, 1)
@@ -83,13 +108,18 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
     return content
 
 
-def complete_with_fallback(primary, fallback, model, fallback_model, messages, api_key, max_tokens, timeout):
+def complete_with_fallback(primary, fallback, model, fallback_model, messages, api_key, max_tokens,
+                           timeout, retry_policy=None, log=None):
+    # Each provider gets its own retry budget, so a fallback after an unreachable
+    # primary is still attempted with the same transport policy.
     try:
-        return chat_completion(primary, model, messages, api_key, max_tokens, timeout)
+        return chat_completion(primary, model, messages, api_key, max_tokens, timeout,
+                               retry_policy=retry_policy, log=log)
     except SlimError:
         if not fallback:
             raise
-        return chat_completion(fallback, fallback_model or model, messages, api_key, max_tokens, timeout)
+        return chat_completion(fallback, fallback_model or model, messages, api_key, max_tokens,
+                               timeout, retry_policy=retry_policy, log=log)
 
 
 def _trim(messages):
@@ -119,6 +149,7 @@ def system_prompt(skill_text):
 
 
 def run_turn(user_text, cfg, conn):
+    rlog = _retry_log if cfg.get("http_verbose") else None
     skills = load_skills(cfg["skills_dir"])
     messages = [
         {"role": "system", "content": system_prompt(format_skills(skills))},
@@ -138,6 +169,8 @@ def run_turn(user_text, cfg, conn):
         cfg.get("api_key") or None,
         cfg["max_tokens"],
         cfg["timeout"],
+        retry_policy=cfg.get("retry") or {},
+        log=rlog,
     )
     parsed = parse_tool_call(reply)
     if parsed:
@@ -165,6 +198,8 @@ def run_turn(user_text, cfg, conn):
             cfg.get("api_key") or None,
             cfg["max_tokens"],
             cfg["timeout"],
+            retry_policy=cfg.get("retry") or {},
+            log=rlog,
         )
     log_turn(conn, "user", user_text)
     log_turn(conn, "assistant", reply)
@@ -202,6 +237,13 @@ def _parse_args(argv):
                    help="allow model-initiated mqtt_publish (default: denied)")
     p.add_argument("--non-interactive", action="store_true",
                    help="never prompt for approval (deny by default)")
+    p.add_argument("--attempts", type=int, default=int(os.environ.get("SLIM_ATTEMPTS", 3)),
+                   help="transport attempts per request (default 3)")
+    p.add_argument("--retry-base-ms", type=int, default=int(os.environ.get("SLIM_RETRY_BASE_MS", 500)),
+                   help="base backoff in ms, doubled per retry (default 500)")
+    p.add_argument("--http-verbose", action="store_true",
+                   default=os.environ.get("SLIM_HTTP_VERBOSE", "") == "1",
+                   help="log every transport attempt to stderr")
     p.add_argument("--once", default="", help="single prompt then exit")
     p.add_argument("--ingest-only", action="store_true")
     return p.parse_args(argv)
@@ -234,6 +276,12 @@ def build_cfg(args):
             # Only prompt when a terminal is attached and the operator did not
             # opt out; otherwise the gate denies instead of blocking forever.
             "interactive": (not args.non_interactive) and sys.stdin.isatty(),
+        },
+        "http_verbose": bool(args.http_verbose or file_cfg.get("http_verbose")),
+        "retry": {
+            "attempts": max(1, int(args.attempts)),
+            "base_delay": max(0.0, args.retry_base_ms / 1000.0),
+            "max_total": float(os.environ.get("SLIM_RETRY_MAX_TOTAL_S", 20.0)),
         },
     }
     return cfg

@@ -11,7 +11,7 @@ python3 -S slim/agent.py --ingest-only
 python3 -S slim/agent.py --base-url http://127.0.0.1:8080/v1 --model tiny --once 'what is this device'
 ```
 
-Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_CONFIG`.
+Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_CONFIG`.
 
 Optional JSON `--config`:
 `base_url`, `fallback_url`, `model`, `fallback_model`, `data_dir`, `skills_dir`, `docs_dir`, `mqtt_http`, `allow_write`, `allow_mqtt`.
@@ -43,6 +43,32 @@ Every decision is logged to stderr:
 Actions a human asks for directly (the `/write`, `/mqtt` slash commands in the C++
 client) are not gated, because the human is the approver — rule 1 still applies to them.
 
+## Retries (bounded, and never for mutations)
+
+The transport retries a request only when repeating it cannot change the outcome
+in a harmful way:
+
+- **Retried:** transport failures (no response), `429`, and `5xx`. A completion
+  request has no lasting server-side effect, so another attempt is safe.
+- **Not retried:** any other `4xx`, a config error (a non-`http://` URL, an
+  oversized response, a peer that is not speaking HTTP), and any exception type
+  the policy does not recognise — unknown means "do not retry".
+- **Never retried: `mqtt_publish`.** A publish is a mutation, and a retry after an
+  ambiguous failure can duplicate the effect. It is sent exactly once; the Python
+  test suite serves a `500` and asserts the server saw one request.
+- Bounded: `--attempts` (default 3), `--retry-base-ms` (default 500, doubled per
+  attempt with a 4 s cap) and an overall budget (`SLIM_RETRY_MAX_TOTAL_S`, default
+  20 s) so a dead endpoint cannot hold a turn open indefinitely.
+- `--http-verbose` (or `SLIM_HTTP_VERBOSE=1`) logs every attempt:
+
+```
+[slim] http attempt 1/3 error=URLError: <urlopen error [Errno 111] Connection refused> retryable
+[slim] http attempt 3/3 error=URLError: <urlopen error [Errno 111] Connection refused> retryable
+```
+
+Each provider in the fallback chain gets its own retry budget, so a fallback after
+an unreachable primary is still attempted under the same policy.
+
 ## Features
 
 - Chat via OpenAI-compatible HTTP; fallback URL on request failure
@@ -59,6 +85,7 @@ python3 -S slim/test_agent.py
 python3 -S slim/test_rag.py
 python3 -S slim/test_tools.py
 python3 -S slim/test_policy.py   # policy + the state-file regression
+python3 -S slim/test_retry.py    # retry policy + "mqtt is never retried"
 ```
 
 `test_policy.py` includes the regression that matters most: open the default-layout
@@ -70,7 +97,7 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 44 checks: suffix/list/jail/policy/json
+make -C slim/cpp test        # 69 checks: suffix/list/jail/policy/retry/json
 ./slim/cpp/slim-agent --help
 ```
 
@@ -84,8 +111,9 @@ file slim/cpp/slim-agent-t830
 ```
 
 Copy `slim-agent-t830` plus `slim/skills` onto the CPE. Flags: `--base-url`, `--model`,
-`--once`, `--data-dir`, `--max-tokens`, and the policy flags `--allow-write`,
-`--allow-mqtt`, `--non-interactive` / `--interactive`. The 270M-class local model does
+`--once`, `--data-dir`, `--max-tokens`, the retry flags `--attempts`, `--retry-base-ms`,
+`--http-verbose`, and the policy flags `--allow-write`, `--allow-mqtt`,
+`--non-interactive` / `--interactive`. The 270M-class local model does
 not emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write`,
 `/mqtt`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
 `.md`/`.txt` (no SQLite in the C++ client). Not hardware-verified on T830.

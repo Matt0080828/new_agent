@@ -158,7 +158,8 @@ class GateWiringTests(unittest.TestCase):
         self.calls = []
         self._orig = agent.complete_with_fallback
 
-        def fake(primary, fallback, model, fallback_model, messages, api_key, max_tokens, timeout):
+        def fake(primary, fallback, model, fallback_model, messages, api_key, max_tokens, timeout,
+                 **_kwargs):
             self.calls.append(messages)
             if len(self.calls) == 1:
                 return '{"tool":"write_file","path":"pwn.md","content":"hi"}'
@@ -200,7 +201,8 @@ class GateWiringTests(unittest.TestCase):
     def test_model_cannot_write_the_database_even_when_writes_are_allowed(self):
         self.cfg["policy"]["allow_write"] = True
 
-        def fake(primary, fallback, model, fallback_model, messages, api_key, max_tokens, timeout):
+        def fake(primary, fallback, model, fallback_model, messages, api_key, max_tokens, timeout,
+                 **_kwargs):
             self.calls.append(messages)
             if len(self.calls) == 1:
                 return '{"tool":"write_file","path":"slim.sqlite","content":"boom"}'

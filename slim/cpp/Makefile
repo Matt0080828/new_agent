@@ -1,7 +1,7 @@
 CXX ?= g++
 CXXFLAGS ?= -O2 -std=c++11 -Wall
 SRCS = agent.cpp http.cpp util.cpp policy.cpp
-CORE = util.cpp policy.cpp
+CORE = util.cpp policy.cpp http.cpp
 BIN = slim-agent
 TESTBIN = tests/test_slim
 

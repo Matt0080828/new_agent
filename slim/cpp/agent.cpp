@@ -27,6 +27,8 @@ struct Cfg {
   int max_tokens;
   int timeout;
   Policy policy;
+  RetryPolicy retry;
+  bool verbose_http;
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -54,7 +56,11 @@ static std::string openai_chat(const Cfg& cfg, const std::string& url, const std
   }
   js << "]}";
   std::string endpoint = join_url(url, "/chat/completions");
-  HttpResult r = http_post_json(endpoint, js.str(), cfg.api_key, cfg.timeout);
+  // Retried: a completion request has no lasting server-side effect, so repeating
+  // it after a transport error or a 5xx is safe. Mutations are never retried (see
+  // the mqtt_publish branch of run_tool).
+  HttpResult r = http_post_json_retry(endpoint, js.str(), cfg.api_key, cfg.timeout,
+                                      cfg.retry, cfg.verbose_http);
   if (!r.error.empty() && r.body.empty())
     throw std::runtime_error(r.error);
   if (r.status && (r.status < 200 || r.status >= 300) && r.body.empty())
@@ -247,6 +253,8 @@ static std::string run_tool(const Cfg& cfg, const std::string& name, const std::
     audit_tool(name, topic, true, why);
     std::ostringstream js;
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
+    // Deliberately single-shot: a publish is a mutation, and a retry after an
+    // ambiguous failure can duplicate the effect.
     HttpResult r = http_post_json(cfg.mqtt_http, js.str(), "", 10);
     if (!r.error.empty() && r.status == 0)
       return "tool error: " + r.error;
@@ -314,6 +322,8 @@ static void usage() {
   std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
+            << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
+            << "         retries transport errors, 429 and 5xx; mutations are never retried\n"
             << "  policy: model-initiated writes/publishes are denied unless enabled\n"
             << "          --allow-write / --allow-mqtt (or SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1)\n"
             << "          state files (*.sqlite, *.db, dotfiles) are never writable\n"
@@ -343,6 +353,15 @@ int main(int argc, char** argv) {
   cfg.policy.allow_write = env_or("SLIM_ALLOW_WRITE", "") == "1";
   cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
   cfg.policy.interactive = isatty(0) != 0;
+  cfg.verbose_http = env_or("SLIM_HTTP_VERBOSE", "") == "1";
+  {
+    std::string a = env_or("SLIM_ATTEMPTS", "");
+    if (!a.empty())
+      cfg.retry.attempts = atoi(a.c_str());
+    std::string b = env_or("SLIM_RETRY_BASE_MS", "");
+    if (!b.empty())
+      cfg.retry.base_delay_ms = atoi(b.c_str());
+  }
   std::string once;
   bool ingest_only = false;
   for (int i = 1; i < argc; ++i) {
@@ -374,7 +393,17 @@ int main(int argc, char** argv) {
       std::string v;
       need(v);
       cfg.max_tokens = atoi(v.c_str());
-    } else if (a == "--allow-write")
+    } else if (a == "--attempts") {
+      std::string v;
+      need(v);
+      cfg.retry.attempts = atoi(v.c_str());
+    } else if (a == "--retry-base-ms") {
+      std::string v;
+      need(v);
+      cfg.retry.base_delay_ms = atoi(v.c_str());
+    } else if (a == "--http-verbose")
+      cfg.verbose_http = true;
+    else if (a == "--allow-write")
       cfg.policy.allow_write = true;
     else if (a == "--allow-mqtt")
       cfg.policy.allow_mqtt = true;

@@ -2,6 +2,7 @@
 // plain assertions, exit code 1 on any failure, so it works on a bare toolchain.
 //
 // Build+run:  make test        (from slim/cpp)
+#include "../http.hpp"
 #include "../policy.hpp"
 #include "../util.hpp"
 
@@ -140,6 +141,124 @@ static void test_approval() {
   check(!is_mutating_tool("read_file") && !is_mutating_tool("rag_search"), "read-only tools not mutating");
 }
 
+// --- retry policy: deterministic (fake attempt function + recording sleeper) ---
+
+struct RetryCtx {
+  int* statuses;  // sequence of statuses handed out, last one repeats
+  int count;
+  int calls;
+};
+
+static bool fake_attempt(void* ctx, HttpResult* out) {
+  RetryCtx* c = static_cast<RetryCtx*>(ctx);
+  int idx = c->calls < c->count ? c->calls : c->count - 1;
+  out->status = c->statuses[idx];
+  out->error = (out->status >= 200 && out->status < 300) ? "" : "synthetic";
+  ++c->calls;
+  return out->status >= 200 && out->status < 300;
+}
+
+struct SleepLog {
+  int total_ms;
+  int calls;
+  int last_ms;
+};
+
+// run_with_retry takes a plain function pointer, so the recorder is reached
+// through one static slot; the tests are single threaded.
+static SleepLog*& sleep_log_slot();
+
+static void recording_sleeper(int ms) {
+  SleepLog* log = sleep_log_slot();
+  if (!log)
+    return;
+  log->total_ms += ms;
+  log->last_ms = ms;
+  ++log->calls;
+}
+
+static SleepLog*& sleep_log_slot() {
+  static SleepLog* slot = 0;
+  return slot;
+}
+
+static void test_retry() {
+  std::cout << "-- retry policy\n";
+  check(is_retryable_status(0), "transport error is retryable");
+  check(is_retryable_status(429), "429 is retryable");
+  check(is_retryable_status(500) && is_retryable_status(503), "5xx is retryable");
+  check(!is_retryable_status(400) && !is_retryable_status(404), "4xx is not retryable");
+  check(!is_retryable_status(-1), "negative status (permanent error) is not retryable");
+  check(!is_retryable_status(200), "success is not retryable");
+
+  RetryPolicy p;
+  check(p.attempts == 3 && p.base_delay_ms == 500 && p.max_delay_ms == 4000, "default policy");
+  check(retry_delay_ms(1, p) == 500, "first backoff is the base");
+  check(retry_delay_ms(2, p) == 1000, "backoff doubles");
+  check(retry_delay_ms(3, p) == 2000, "backoff doubles again");
+  check(retry_delay_ms(9, p) == 4000, "backoff is capped");
+
+  {
+    int statuses[] = {500, 500, 200};
+    RetryCtx ctx = {statuses, 3, 0};
+    HttpResult out;
+    SleepLog sleep = {0, 0, 0};
+    sleep_log_slot() = &sleep;
+    bool delivered = run_with_retry(p, fake_attempt, &ctx, &out, recording_sleeper, 0);
+    sleep_log_slot() = 0;
+    check(delivered && out.status == 200, "recovers after two 5xx");
+    check(ctx.calls == 3, "exactly three attempts");
+    check(sleep.calls == 2 && sleep.total_ms == 1500, "backoff 500 then 1000");
+  }
+
+  {
+    int statuses[] = {400};
+    RetryCtx ctx = {statuses, 1, 0};
+    HttpResult out;
+    SleepLog sleep = {0, 0, 0};
+    sleep_log_slot() = &sleep;
+    bool delivered = run_with_retry(p, fake_attempt, &ctx, &out, recording_sleeper, 0);
+    sleep_log_slot() = 0;
+    check(delivered && out.status == 400, "4xx is returned as-is");
+    check(ctx.calls == 1 && sleep.calls == 0, "no retry and no sleep for 4xx");
+  }
+
+  {
+    int statuses[] = {503};
+    RetryCtx ctx = {statuses, 1, 0};
+    HttpResult out;
+    SleepLog sleep = {0, 0, 0};
+    sleep_log_slot() = &sleep;
+    bool delivered = run_with_retry(p, fake_attempt, &ctx, &out, recording_sleeper, 0);
+    sleep_log_slot() = 0;
+    check(!delivered && out.status == 503, "exhausted retries surface the failure");
+    check(ctx.calls == 3 && sleep.calls == 2, "attempts and sleeps are bounded");
+  }
+
+  {
+    RetryPolicy once;
+    once.attempts = 1;
+    int statuses[] = {500};
+    RetryCtx ctx = {statuses, 1, 0};
+    HttpResult out;
+    SleepLog sleep = {0, 0, 0};
+    sleep_log_slot() = &sleep;
+    run_with_retry(once, fake_attempt, &ctx, &out, recording_sleeper, 0);
+    sleep_log_slot() = 0;
+    check(ctx.calls == 1 && sleep.calls == 0, "attempts=1 means a single try");
+  }
+
+  {
+    int statuses[] = {502, 200};
+    RetryCtx ctx = {statuses, 2, 0};
+    HttpResult out;
+    std::string log;
+    run_with_retry(p, fake_attempt, &ctx, &out, recording_sleeper, &log);
+    check(log.find("attempt 1/3 status=502") != std::string::npos, "log records the first attempt");
+    check(log.find("attempt 2/3 status=200") != std::string::npos, "log records the recovery");
+  }
+}
+
 static void test_cap_prompt() {
   std::cout << "-- cap_prompt\n";
   check(cap_prompt("hello", 6000) == "hello", "short prompt untouched");
@@ -176,6 +295,7 @@ int main() {
   test_protected_path();
   test_approval();
   test_cap_prompt();
+  test_retry();
   test_json_helpers();
   std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   if (g_failures) {
