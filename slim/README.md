@@ -561,3 +561,28 @@ longer one, change that constant and rebuild; the Python client has the knob as
 ## Out of scope
 
 Gateway, dashboard, Honcho, embeddings, MCP, arbitrary shell, full Hermes skills, 3B local models.
+
+### There is no way to run a system command, and that is deliberate
+
+The tool registry holds exactly four tools - `rag_search`, `read_file`, `write_file`,
+`mqtt_publish` - and the sources contain no way to run a process: no `system`, `popen`, `exec*`
+or `fork` in the C++ client, and no `subprocess`/`os.system` in the Python one. A tool name the
+policy cannot classify is denied, never allowed, so a newly invented tool cannot open a hole by
+accident. Checked on the device:
+
+```
+$ ./slim-agent ... --once '/exec id'          -> unknown command; /help
+$ ./slim-agent ... --once '/sh ls /'          -> unknown command; /help
+$ ./slim-agent ... --once '/read /etc/passwd' -> tool error: path must be relative and stay in data dir
+```
+
+Two consequences worth knowing. A model that answers "the output of `id` is ..." is making it up
+- nothing ran, and an agent that cannot execute anything cannot be talked into executing
+something by a poisoned markdown file in the corpus. And `/read` is jailed to `--data-dir`
+while `/rag` searches `--skills-dir`/`--docs-dir`, so corpus files are searchable but not
+readable as files unless they live inside the data directory.
+
+If the device should *act*, the sanctioned path is MQTT: `--mqtt-http` plus `--allow-mqtt`
+lets the agent publish to a topic, and the consumer that turns a topic into an action is a
+separate program you write and audit. Keeping the privilege on the far side of a broker is
+what makes the fail-closed policy here worth anything.
