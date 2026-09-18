@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# C++ build output (sources live in slim/cpp and slim/cpp/tests)
+/slim/cpp/slim-agent
+/slim/cpp/slim-agent-t830
+/slim/cpp/slim-agent-t830-static
+/slim/cpp/tests/test_slim
+/slim/cpp/tests/test_sse
+/slim/cpp/tests/test_session
+/slim/cpp/tests/test_tools
