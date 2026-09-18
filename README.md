@@ -21,4 +21,3 @@ cd slim && python3 -m unittest discover -s . -p 'test_*.py'
 This branch is a fresh root: it shares no history with the other branches and cannot affect them.
 The Hermes fork (and the Pi2/IoT line) remain in `main` / `t830-slim`.
 
-License: MIT — upstream Hermes copyright preserved, see `LICENSE`.
