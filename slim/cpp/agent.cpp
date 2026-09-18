@@ -1,5 +1,6 @@
 #include "http.hpp"
 #include "policy.hpp"
+#include "sse.hpp"
 #include "util.hpp"
 
 #include <cstdlib>
@@ -29,6 +30,7 @@ struct Cfg {
   Policy policy;
   RetryPolicy retry;
   bool verbose_http;
+  bool stream;
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -41,10 +43,16 @@ static std::string env_or(const char* k, const std::string& d) {
   return v && v[0] ? std::string(v) : d;
 }
 
+static void print_delta(void* ctx, const std::string& delta) {
+  (void)ctx;
+  std::cout << delta << std::flush;  // live output: the point of streaming on a slow CPE
+}
+
 static std::string openai_chat(const Cfg& cfg, const std::string& url, const std::string& model,
                                const std::vector<std::pair<std::string, std::string> >& msgs) {
   std::ostringstream js;
-  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":false,\"temperature\":0"
+  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":"
+     << (cfg.stream ? "true" : "false") << ",\"temperature\":0"
      << ",\"max_tokens\":" << cfg.max_tokens
      << ",\"stop\":[\"\\nuser\",\"\\nassistant\",\"\\nmodel\",\"<start_of_turn>\",\"\\n- No\"]"
      << ",\"messages\":[";
@@ -56,18 +64,39 @@ static std::string openai_chat(const Cfg& cfg, const std::string& url, const std
   }
   js << "]}";
   std::string endpoint = join_url(url, "/chat/completions");
-  // Retried: a completion request has no lasting server-side effect, so repeating
-  // it after a transport error or a 5xx is safe. Mutations are never retried (see
-  // the mqtt_publish branch of run_tool).
-  HttpResult r = http_post_json_retry(endpoint, js.str(), cfg.api_key, cfg.timeout,
-                                      cfg.retry, cfg.verbose_http);
+  HttpResult r;
+  if (cfg.stream) {
+    // Deltas go straight to stdout as they arrive; the assembled text comes back
+    // in r.body. Retry applies only before the first delta (see http.hpp).
+    r = http_post_json_stream(endpoint, js.str(), cfg.api_key, cfg.timeout, cfg.retry,
+                              cfg.verbose_http, print_delta, 0);
+    if (!r.error.empty())
+      std::cerr << "\n[slim] stream: " << r.error << "\n";
+  } else {
+    // Retried: a completion request has no lasting server-side effect, so repeating
+    // it after a transport error or a 5xx is safe.
+    r = http_post_json_retry(endpoint, js.str(), cfg.api_key, cfg.timeout, cfg.retry,
+                             cfg.verbose_http);
+  }
   if (!r.error.empty() && r.body.empty())
     throw std::runtime_error(r.error);
   if (r.status && (r.status < 200 || r.status >= 300) && r.body.empty())
     throw std::runtime_error(r.error.empty() ? "http error" : r.error);
   std::string content;
-  if (!json_extract_string(r.body, "content", content))
-    throw std::runtime_error(r.error.empty() ? "no content in response" : r.error + " " + r.body.substr(0, 200));
+  if (cfg.stream) {
+    content = r.body;
+    if (content.empty())
+      throw std::runtime_error(r.error.empty() ? "empty stream" : r.error);
+  } else {
+    // Some servers answer with an event stream even when stream was not requested;
+    // a plain "first content" extraction would then return only the first delta,
+    // so prefer assembling the data lines when the body carries any.
+    std::string assembled;
+    if (r.body.find("data:") != std::string::npos && sse_assemble(r.body, assembled))
+      content = assembled;
+    else if (!json_extract_string(r.body, "content", content))
+      throw std::runtime_error(r.error.empty() ? "no content in response" : r.error + " " + r.body.substr(0, 200));
+  }
   return content;
 }
 
@@ -315,13 +344,26 @@ static std::string run_turn(const Cfg& cfg, const std::string& user) {
   std::vector<std::pair<std::string, std::string> > msgs;
   msgs.push_back(std::make_pair(std::string("user"),
                                 std::string("Q: ") + cap_prompt(u, kMaxPrompt) + "\nA:"));
-  return sanitize_reply(chat_fallback(cfg, msgs));
+  std::string reply = chat_fallback(cfg, msgs);
+  if (cfg.stream)
+    return std::string();  // the deltas were already printed live
+  return sanitize_reply(reply);
+}
+
+static void print_reply(const Cfg& cfg, const std::string& out, bool slash_command) {
+  // With --stream the deltas have already been written, so only the trailing
+  // newline is left. Slash commands never stream and print as usual.
+  if (cfg.stream && !slash_command)
+    std::cout << "\n";
+  else
+    std::cout << out << "\n";
 }
 
 static void usage() {
   std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
+            << "  stream: --stream prints tokens as they arrive (SLIM_STREAM=1)\n"
             << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
             << "         retries transport errors, 429 and 5xx; mutations are never retried\n"
             << "  policy: model-initiated writes/publishes are denied unless enabled\n"
@@ -353,6 +395,7 @@ int main(int argc, char** argv) {
   cfg.policy.allow_write = env_or("SLIM_ALLOW_WRITE", "") == "1";
   cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
   cfg.policy.interactive = isatty(0) != 0;
+  cfg.stream = env_or("SLIM_STREAM", "") == "1";
   cfg.verbose_http = env_or("SLIM_HTTP_VERBOSE", "") == "1";
   {
     std::string a = env_or("SLIM_ATTEMPTS", "");
@@ -403,6 +446,8 @@ int main(int argc, char** argv) {
       cfg.retry.base_delay_ms = atoi(v.c_str());
     } else if (a == "--http-verbose")
       cfg.verbose_http = true;
+    else if (a == "--stream")
+      cfg.stream = true;
     else if (a == "--allow-write")
       cfg.policy.allow_write = true;
     else if (a == "--allow-mqtt")
@@ -437,7 +482,7 @@ int main(int argc, char** argv) {
   }
   try {
     if (!once.empty()) {
-      std::cout << run_turn(cfg, once) << "\n";
+      print_reply(cfg, run_turn(cfg, once), once_slash);
       return 0;
     }
     std::cerr << "slash: /rag /read /write /help. empty line or Ctrl-D to quit.\n";
@@ -445,7 +490,7 @@ int main(int argc, char** argv) {
     while (std::getline(std::cin, line)) {
       if (line.empty())
         break;
-      std::cout << run_turn(cfg, line) << "\n";
+      print_reply(cfg, run_turn(cfg, line), !line.empty() && line[0] == '/');
     }
   } catch (const std::exception& e) {
     die(e.what(), 1);

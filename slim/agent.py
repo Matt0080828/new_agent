@@ -21,6 +21,8 @@ from policy import approve_tool
 from retry import DEFAULT_ATTEMPTS, DEFAULT_BASE_DELAY, DEFAULT_MAX_TOTAL, run_with_retry
 from rag import connect, ingest_tree, log_turn, search
 from skills import format_skills, load_skills
+from sse import assemble
+from stream import stream_completion
 from tools import TOOLS, parse_tool_call, run_tool
 
 DEFAULT_MAX_TOKENS = 256
@@ -40,6 +42,15 @@ def _retry_log(line):
     sys.stderr.write(line + "\n")
 
 
+def _stream_to_stdout():
+    """Write each delta straight to stdout, unbuffered: that is the point of
+    streaming on a slow CPE."""
+    def emit(text):
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    return emit
+
+
 def _post_once(url, data, headers, timeout):
     """One HTTP attempt. Raises the transport exception unchanged so the retry
     policy can classify it, rather than wrapping it in SlimError first."""
@@ -52,7 +63,8 @@ def _post_once(url, data, headers, timeout):
 
 
 def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_MAX_TOKENS,
-                    timeout=DEFAULT_TIMEOUT, retry_policy=None, log=None):
+                    timeout=DEFAULT_TIMEOUT, retry_policy=None, log=None, stream=False,
+                    on_delta=None):
     base = base_url.rstrip("/")
     if base.endswith("/v1"):
         url = base + "/chat/completions"
@@ -62,16 +74,26 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
         "model": model,
         "messages": messages,
         "max_tokens": int(max_tokens),
-        "stream": False,
+        "stream": bool(stream),
     }
     data = json.dumps(payload).encode("utf-8")
     headers = {
         "Content-Type": "application/json",
-        "Accept": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
         "Content-Length": str(len(data)),
     }
     if api_key:
         headers["Authorization"] = "Bearer " + api_key
+    if stream:
+        # Deltas reach on_delta as they arrive; the assembled text comes back here.
+        result = stream_completion(url, payload, api_key=api_key, headers=headers,
+                                   timeout=timeout, on_delta=on_delta,
+                                   retry_policy=retry_policy, log=log)
+        if result.error:
+            sys.stderr.write("[slim] stream: %s\n" % result.error)
+        if not result.text:
+            raise SlimError(result.error or "empty stream", 1)
+        return result.text
     # Retried: a completion request has no lasting server-side effect, so repeating
     # it after a transport error, a 429 or a 5xx is safe. Mutations are never
     # retried (see the mqtt_publish branch of tools.run_tool).
@@ -97,6 +119,12 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
     try:
         obj = json.loads(raw.decode("utf-8"))
     except ValueError as exc:
+        # A server may answer with an event stream even when stream was not
+        # requested; assembling the data lines beats failing on the JSON parse
+        # (and returns the whole reply, not just its first delta).
+        text = assemble(raw.decode("utf-8", "replace"))
+        if text:
+            return text
         raise SlimError("invalid JSON: %s" % exc, 1)
     choices = obj.get("choices") or []
     if not choices:
@@ -109,17 +137,19 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
 
 
 def complete_with_fallback(primary, fallback, model, fallback_model, messages, api_key, max_tokens,
-                           timeout, retry_policy=None, log=None):
+                           timeout, retry_policy=None, log=None, stream=False, on_delta=None):
     # Each provider gets its own retry budget, so a fallback after an unreachable
     # primary is still attempted with the same transport policy.
     try:
         return chat_completion(primary, model, messages, api_key, max_tokens, timeout,
-                               retry_policy=retry_policy, log=log)
+                               retry_policy=retry_policy, log=log, stream=stream,
+                               on_delta=on_delta)
     except SlimError:
         if not fallback:
             raise
         return chat_completion(fallback, fallback_model or model, messages, api_key, max_tokens,
-                               timeout, retry_policy=retry_policy, log=log)
+                               timeout, retry_policy=retry_policy, log=log, stream=stream,
+                               on_delta=on_delta)
 
 
 def _trim(messages):
@@ -150,6 +180,8 @@ def system_prompt(skill_text):
 
 def run_turn(user_text, cfg, conn):
     rlog = _retry_log if cfg.get("http_verbose") else None
+    streaming = bool(cfg.get("stream"))
+    emit = _stream_to_stdout() if streaming else None
     skills = load_skills(cfg["skills_dir"])
     messages = [
         {"role": "system", "content": system_prompt(format_skills(skills))},
@@ -171,6 +203,8 @@ def run_turn(user_text, cfg, conn):
         cfg["timeout"],
         retry_policy=cfg.get("retry") or {},
         log=rlog,
+        stream=streaming,
+        on_delta=emit,
     )
     parsed = parse_tool_call(reply)
     if parsed:
@@ -200,10 +234,14 @@ def run_turn(user_text, cfg, conn):
             cfg["timeout"],
             retry_policy=cfg.get("retry") or {},
             log=rlog,
+            stream=streaming,
+            on_delta=emit,
         )
     log_turn(conn, "user", user_text)
     log_turn(conn, "assistant", reply)
-    return reply
+    # With streaming the deltas were already written to stdout, so the caller must
+    # not print the text a second time.
+    return "" if streaming else reply
 
 
 def _load_config(path):
@@ -244,6 +282,9 @@ def _parse_args(argv):
     p.add_argument("--http-verbose", action="store_true",
                    default=os.environ.get("SLIM_HTTP_VERBOSE", "") == "1",
                    help="log every transport attempt to stderr")
+    p.add_argument("--stream", action="store_true",
+                   default=os.environ.get("SLIM_STREAM", "") == "1",
+                   help="print tokens as they arrive (SSE); retry stops once output was shown")
     p.add_argument("--once", default="", help="single prompt then exit")
     p.add_argument("--ingest-only", action="store_true")
     return p.parse_args(argv)
@@ -278,6 +319,7 @@ def build_cfg(args):
             "interactive": (not args.non_interactive) and sys.stdin.isatty(),
         },
         "http_verbose": bool(args.http_verbose or file_cfg.get("http_verbose")),
+        "stream": bool(args.stream or file_cfg.get("stream")),
         "retry": {
             "attempts": max(1, int(args.attempts)),
             "base_delay": max(0.0, args.retry_base_ms / 1000.0),

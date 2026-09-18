@@ -1,5 +1,8 @@
 #include "http.hpp"
 
+#include "sse.hpp"
+#include "util.hpp"
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstdio>
@@ -12,6 +15,8 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+static const size_t kMaxResponse = 256 * 1024;
 
 static bool parse_url(const std::string& url, std::string& host, int& port, std::string& path) {
   std::string u = url;
@@ -33,17 +38,36 @@ static bool parse_url(const std::string& url, std::string& host, int& port, std:
   return !host.empty() && port > 0;
 }
 
-HttpResult http_post_json(const std::string& url, const std::string& json,
-                          const std::string& bearer, int timeout_sec) {
-  HttpResult out;
-  out.status = 0;
-  std::string host, path;
+namespace {
+
+// Result of the connection handshake, shared by the buffered and the streaming
+// request paths so both classify failures identically.
+struct OpenResult {
+  int fd;
+  std::string host;
+  std::string error;
+  bool permanent;  // retrying cannot help (bad scheme, ...)
+  OpenResult() : fd(-1), permanent(false) {}
+};
+
+struct ReadResult {
+  bool ok;
+  std::string error;
+  bool permanent;
+  ReadResult() : ok(false), permanent(false) {}
+};
+
+}  // namespace
+
+// Parse the URL, connect, and send the request body. The caller owns the fd.
+static OpenResult http_open_send(const std::string& url, const std::string& json,
+                                 const std::string& bearer, int timeout_sec) {
+  OpenResult out;
+  std::string path;
   int port = 80;
-  if (!parse_url(url, host, port, path)) {
+  if (!parse_url(url, out.host, port, path)) {
     out.error = "only http:// URLs supported";
-    // Negative status marks a permanent/config error. Transport failures use 0,
-    // which the retry policy treats as retryable; this must not be retried.
-    out.status = -1;
+    out.permanent = true;
     return out;
   }
   struct addrinfo hints;
@@ -53,7 +77,7 @@ HttpResult http_post_json(const std::string& url, const std::string& json,
   struct addrinfo* res = 0;
   std::ostringstream ps;
   ps << port;
-  int gai = getaddrinfo(host.c_str(), ps.str().c_str(), &hints, &res);
+  int gai = getaddrinfo(out.host.c_str(), ps.str().c_str(), &hints, &res);
   if (gai != 0) {
     out.error = gai_strerror(gai);
     return out;
@@ -80,7 +104,7 @@ HttpResult http_post_json(const std::string& url, const std::string& json,
   }
   std::ostringstream req;
   req << "POST " << path << " HTTP/1.0\r\n"
-      << "Host: " << host << "\r\n"
+      << "Host: " << out.host << "\r\n"
       << "Content-Type: application/json\r\n"
       << "Accept: application/json\r\n"
       << "Content-Length: " << json.size() << "\r\n"
@@ -99,46 +123,78 @@ HttpResult http_post_json(const std::string& url, const std::string& json,
     }
     sent += (size_t)n;
   }
-  std::string resp;
+  out.fd = fd;
+  return out;
+}
+
+static ReadResult http_read_all(int fd, std::string* out) {
+  ReadResult r;
   char buf[4096];
   for (;;) {
     ssize_t n = recv(fd, buf, sizeof(buf), 0);
     if (n < 0) {
-      out.error = strerror(errno);
-      close(fd);
-      return out;
+      r.error = strerror(errno);
+      return r;
     }
     if (n == 0)
       break;
-    resp.append(buf, (size_t)n);
-    if (resp.size() > 256 * 1024) {
-      out.error = "response too large";
-      out.status = -1;  // permanent: a retry returns the same oversized body
-      close(fd);
-      return out;
+    out->append(buf, (size_t)n);
+    if (out->size() > kMaxResponse) {
+      r.error = "response too large";
+      r.permanent = true;
+      return r;
     }
   }
-  close(fd);
-  std::string::size_type sp = resp.find(' ');
+  r.ok = true;
+  return r;
+}
+
+// Split a raw response into status and body.
+static void http_parse_response(const std::string& raw, HttpResult* out) {
+  std::string::size_type sp = raw.find(' ');
   if (sp != std::string::npos)
-    out.status = atoi(resp.c_str() + sp + 1);
-  std::string::size_type sep = resp.find("\r\n\r\n");
+    out->status = atoi(raw.c_str() + sp + 1);
+  std::string::size_type sep = raw.find("\r\n\r\n");
   if (sep == std::string::npos)
-    sep = resp.find("\n\n");
+    sep = raw.find("\n\n");
   if (sep == std::string::npos) {
-    out.error = "bad HTTP response";
-    out.status = -1;  // permanent: the peer is not speaking HTTP in a usable way
+    out->error = "bad HTTP response";
+    out->status = -1;  // permanent: the peer is not speaking HTTP in a usable way
+    return;
+  }
+  if (sep == raw.find("\r\n\r\n"))
+    out->body = raw.substr(sep + 4);
+  else
+    out->body = raw.substr(sep + 2);
+  if (out->status < 200 || out->status >= 300)
+    out->error = "HTTP status";
+}
+
+HttpResult http_post_json(const std::string& url, const std::string& json,
+                          const std::string& bearer, int timeout_sec) {
+  HttpResult out;
+  out.status = 0;
+  OpenResult o = http_open_send(url, json, bearer, timeout_sec);
+  if (o.fd < 0) {
+    out.error = o.error;
+    out.status = o.permanent ? -1 : 0;
     return out;
   }
-  if (sep == resp.find("\r\n\r\n"))
-    out.body = resp.substr(sep + 4);
-  else
-    out.body = resp.substr(sep + 2);
-  if (out.status < 200 || out.status >= 300)
-    out.error = "HTTP status";
+  std::string raw;
+  ReadResult r = http_read_all(o.fd, &raw);
+  close(o.fd);
+  if (!r.ok) {
+    out.error = r.error;
+    out.status = r.permanent ? -1 : 0;
+    return out;
+  }
+  http_parse_response(raw, &out);
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Retry policy
+// ---------------------------------------------------------------------------
 
 void http_sleep_ms(int ms);  // defined below; forward declared for run_with_retry
 
@@ -230,6 +286,169 @@ HttpResult http_post_json_retry(const std::string& url, const std::string& json,
   out.status = 0;
   std::string log;
   run_with_retry(policy, post_attempt, &ctx, &out, 0, verbose ? &log : 0);
+  if (verbose && !log.empty())
+    std::fputs(log.c_str(), stderr);
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming (text/event-stream)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct StreamState {
+  SseParser parser;
+  std::string acc;   // assembled assistant text
+  std::string raw;   // raw bytes, kept for status + non-SSE fallbacks
+  DeltaFn on_delta;
+  void* ctx;
+  bool emitted;      // at least one delta reached the user
+  bool too_large;
+  bool header_done;  // HTTP header/body boundary located
+  size_t fed;        // raw bytes already handed to the parser
+
+  StreamState(DeltaFn d, void* c)
+      : on_delta(d), ctx(c), emitted(false), too_large(false), header_done(false), fed(0) {}
+};
+
+// Drain every complete payload currently queued in the parser.
+void drain_stream(StreamState* s) {
+  std::string payload;
+  while (s->parser.next(&payload)) {
+    std::string delta;
+    if (!sse_delta_content(payload, delta) || delta.empty())
+      continue;
+    s->acc += delta;
+    s->emitted = true;
+    if (s->on_delta)
+      s->on_delta(s->ctx, delta);
+  }
+}
+
+// One streaming attempt. Returns true when a usable response arrived.
+bool stream_attempt(const std::string& url, const std::string& json, const std::string& bearer,
+                    int timeout_sec, StreamState* s, HttpResult* out) {
+  s->parser.reset();
+  s->acc.clear();
+  s->raw.clear();
+  s->emitted = false;
+  s->too_large = false;
+  s->header_done = false;
+  s->fed = 0;
+
+  OpenResult o = http_open_send(url, json, bearer, timeout_sec);
+  if (o.fd < 0) {
+    out->error = o.error;
+    out->status = o.permanent ? -1 : 0;
+    return false;
+  }
+  char buf[4096];
+  for (;;) {
+    ssize_t n = recv(o.fd, buf, sizeof(buf), 0);
+    if (n < 0) {
+      out->error = strerror(errno);
+      out->status = 0;
+      close(o.fd);
+      return false;
+    }
+    if (n == 0)
+      break;
+    s->raw.append(buf, (size_t)n);
+    if (s->raw.size() > kMaxResponse) {
+      s->too_large = true;
+      close(o.fd);
+      return false;
+    }
+    // Only the bytes after the HTTP header reach the event parser, so the status
+    // line can never be mistaken for a data line. The boundary is located once
+    // and `fed` tracks how much of the body has already been parsed.
+    if (!s->header_done) {
+      std::string::size_type sep = s->raw.find("\r\n\r\n");
+      size_t hlen = 0;
+      if (sep != std::string::npos) {
+        hlen = sep + 4;
+      } else {
+        sep = s->raw.find("\n\n");
+        if (sep != std::string::npos)
+          hlen = sep + 2;
+      }
+      if (hlen == 0)
+        continue;  // headers still incomplete: keep reading
+      s->header_done = true;
+      s->fed = hlen;
+    }
+    if (s->raw.size() > s->fed) {
+      s->parser.feed(s->raw.substr(s->fed));
+      s->fed = s->raw.size();
+      drain_stream(s);
+    }
+  }
+  close(o.fd);
+  s->parser.flush();
+  drain_stream(s);
+  http_parse_response(s->raw, out);
+  if (s->too_large) {
+    out->error = "response too large";
+    out->status = -1;
+    return false;
+  }
+  if (out->status < 200 || out->status >= 300) {
+    out->body = s->raw;
+    return false;
+  }
+  out->body = s->acc;
+  if (out->body.empty()) {
+    // A server that ignored "stream": true answers with one plain JSON body.
+    // Fall back to it rather than reporting an empty successful reply.
+    std::string content;
+    if (json_extract_string(s->raw, "content", content) && !content.empty())
+      out->body = content;
+  }
+  return true;
+}
+
+}  // namespace
+
+HttpResult http_post_json_stream(const std::string& url, const std::string& json,
+                                 const std::string& bearer, int timeout_sec,
+                                 const RetryPolicy& policy, bool verbose,
+                                 DeltaFn on_delta, void* ctx) {
+  StreamState s(on_delta, ctx);
+  HttpResult out;
+  out.status = 0;
+  int attempts = policy.attempts > 0 ? policy.attempts : 1;
+  std::string log;
+  for (int i = 1; i <= attempts; ++i) {
+    bool ok = stream_attempt(url, json, bearer, timeout_sec, &s, &out);
+    if (ok) {
+      if (!s.parser.done())
+        out.error = "stream ended without [DONE]";
+      if (verbose) {
+        std::ostringstream line;
+        line << "[slim] stream attempt " << i << "/" << attempts << " status=" << out.status
+             << " deltas=" << (s.emitted ? "yes" : "no") << " bytes=" << s.acc.size() << "\n";
+        log += line.str();
+      }
+      break;
+    }
+    bool retryable = is_retryable_status(out.status);
+    if (verbose) {
+      std::ostringstream line;
+      line << "[slim] stream attempt " << i << "/" << attempts << " status=" << out.status
+           << (retryable ? " retryable" : " final");
+      if (!out.error.empty())
+        line << ": " << out.error;
+      line << "\n";
+      log += line.str();
+    }
+    // Once a delta has been shown, a retry would restart generation behind the
+    // user's back: the failure is final.
+    if (!retryable || s.emitted || i == attempts)
+      break;
+    int delay = retry_delay_ms(i, policy);
+    http_sleep_ms(delay);
+  }
   if (verbose && !log.empty())
     std::fputs(log.c_str(), stderr);
   return out;

@@ -11,7 +11,7 @@ python3 -S slim/agent.py --ingest-only
 python3 -S slim/agent.py --base-url http://127.0.0.1:8080/v1 --model tiny --once 'what is this device'
 ```
 
-Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_CONFIG`.
+Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_STREAM`, `SLIM_CONFIG`.
 
 Optional JSON `--config`:
 `base_url`, `fallback_url`, `model`, `fallback_model`, `data_dir`, `skills_dir`, `docs_dir`, `mqtt_http`, `allow_write`, `allow_mqtt`.
@@ -69,6 +69,35 @@ in a harmful way:
 Each provider in the fallback chain gets its own retry budget, so a fallback after
 an unreachable primary is still attempted under the same policy.
 
+## Streaming (`--stream`)
+
+Both clients can read the reply as server-sent events, so tokens appear while the
+model is still generating instead of after it has finished:
+
+```bash
+python3 -S slim/agent.py --stream --once 'status'
+./slim/cpp/slim-agent --stream --once 'status'
+```
+
+- `--stream` (or `SLIM_STREAM=1`) is off by default, because it changes how a turn is
+  printed: deltas go straight to stdout and the assembled reply is not printed again.
+- The parser is incremental (`slim/sse.py`, `slim/cpp/sse.cpp`). A socket chunk
+  boundary may fall inside a line, inside the JSON, or between the two newlines that
+  end an event, and a stream that ends without a trailing newline is still parsed -
+  the tests feed one byte at a time to cover every split point.
+- **Retry stops once a delta has been shown.** Before the first delta a retry is safe;
+  after it, another attempt would restart generation behind the operator's back, so a
+  mid-stream failure is final and reported on stderr. The C++ test proves the retry is
+  not attempted by making the server offer a second response that must never be
+  requested.
+- A stream that ends without `[DONE]` keeps the text and reports
+  `stream ended without [DONE]`.
+- On the Python side the reader uses `read1()`: `read(n)` on a buffered HTTP response
+  blocks until `n` bytes or EOF, which silently turns streaming back into one dump at
+  the end.
+- If a server answers with an event stream even though `stream` was not requested, the
+  non-streaming path assembles the data lines instead of returning only the first delta.
+
 ## Features
 
 - Chat via OpenAI-compatible HTTP; fallback URL on request failure
@@ -86,10 +115,13 @@ python3 -S slim/test_rag.py
 python3 -S slim/test_tools.py
 python3 -S slim/test_policy.py   # policy + the state-file regression
 python3 -S slim/test_retry.py    # retry policy + "mqtt is never retried"
+python3 -S slim/test_sse.py      # SSE parser, streaming and "no retry after a delta"
 ```
 
 `test_policy.py` includes the regression that matters most: open the default-layout
 database, attempt `write_file slim.sqlite`, and assert the database still reads back.
+`test_sse.py` covers the SSE parser at every chunk split, the incremental-delivery
+ordering guarantee, and a real loopback socket.
 
 ## C++ executable (same features)
 
@@ -97,7 +129,7 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 69 checks: suffix/list/jail/policy/retry/json
+make -C slim/cpp test        # tests/test_slim: 70 checks, tests/test_sse: 45 checks
 ./slim/cpp/slim-agent --help
 ```
 
@@ -112,7 +144,7 @@ file slim/cpp/slim-agent-t830
 
 Copy `slim-agent-t830` plus `slim/skills` onto the CPE. Flags: `--base-url`, `--model`,
 `--once`, `--data-dir`, `--max-tokens`, the retry flags `--attempts`, `--retry-base-ms`,
-`--http-verbose`, and the policy flags `--allow-write`, `--allow-mqtt`,
+`--http-verbose`, `--stream`, and the policy flags `--allow-write`, `--allow-mqtt`,
 `--non-interactive` / `--interactive`. The 270M-class local model does
 not emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write`,
 `/mqtt`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
