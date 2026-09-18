@@ -140,6 +140,19 @@ static void test_approval() {
   check(!is_mutating_tool("read_file") && !is_mutating_tool("rag_search"), "read-only tools not mutating");
 }
 
+static void test_cap_prompt() {
+  std::cout << "-- cap_prompt\n";
+  check(cap_prompt("hello", 6000) == "hello", "short prompt untouched");
+  check(cap_prompt("", 10).empty(), "empty prompt untouched");
+  std::string big(100, 'x');
+  std::string capped = cap_prompt(big, 10);
+  check(capped.size() == 10 + std::string("\n[truncated]").size(), "long prompt truncated to the cap");
+  check(capped.compare(capped.size() - 12, 12, "[truncated]") == 0 ||
+            capped.find("[truncated]") != std::string::npos,
+        "truncation is marked");
+  check(capped.compare(0, 10, big.substr(0, 10)) == 0, "prefix preserved");
+}
+
 static void test_json_helpers() {
   std::cout << "-- json helpers\n";
   std::string v;
@@ -162,6 +175,7 @@ int main() {
   test_jail_path();
   test_protected_path();
   test_approval();
+  test_cap_prompt();
   test_json_helpers();
   std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   if (g_failures) {

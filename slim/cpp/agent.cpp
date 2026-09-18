@@ -13,7 +13,6 @@
 
 static const size_t kMaxWrite = 8 * 1024;
 static const size_t kMaxPrompt = 6000;
-static const int kMaxHistory = 6;
 
 struct Cfg {
   std::string base_url;
@@ -76,22 +75,9 @@ static std::string chat_fallback(const Cfg& cfg, const std::vector<std::pair<std
   }
 }
 
-static void trim(std::vector<std::pair<std::string, std::string> >& msgs) {
-  while (!msgs.empty()) {
-    size_t n = 0;
-    for (size_t i = 0; i < msgs.size(); ++i)
-      n += msgs[i].second.size();
-    if (n <= kMaxPrompt)
-      break;
-    if (msgs.size() > 2 && msgs[0].first == "system")
-      msgs.erase(msgs.begin() + 1);
-    else if (msgs.size() > 1)
-      msgs.erase(msgs.begin());
-    else
-      break;
-  }
-}
-
+// History trimming used to live here. It became unreachable when model tool
+// calls were dropped (every turn is now a single user message), so the size
+// guard moved to cap_prompt() in util.cpp, where it has a unit test.
 struct Hit {
   std::string path;
   std::string snippet;
@@ -319,7 +305,8 @@ static std::string run_turn(const Cfg& cfg, const std::string& user) {
   if (cfg.base_url.empty() || cfg.model.empty())
     throw std::runtime_error("set --base-url and --model, or use /rag /read /write");
   std::vector<std::pair<std::string, std::string> > msgs;
-  msgs.push_back(std::make_pair(std::string("user"), std::string("Q: ") + u + "\nA:"));
+  msgs.push_back(std::make_pair(std::string("user"),
+                                std::string("Q: ") + cap_prompt(u, kMaxPrompt) + "\nA:"));
   return sanitize_reply(chat_fallback(cfg, msgs));
 }
 

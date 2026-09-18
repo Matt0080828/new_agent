@@ -15,6 +15,12 @@ bool has_suffix(const std::string& s, const std::string& suffix) {
          s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+std::string cap_prompt(const std::string& s, size_t max_chars) {
+  if (s.size() <= max_chars)
+    return s;
+  return s.substr(0, max_chars) + "\n[truncated]";
+}
+
 std::string json_escape(const std::string& s) {
   std::string o;
   o.reserve(s.size() + 8);
