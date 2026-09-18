@@ -26,7 +26,7 @@ python3 -S slim/agent.py --ingest-only
 python3 -S slim/agent.py --base-url http://127.0.0.1:8080/v1 --model tiny --once 'what is this device'
 ```
 
-Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_STREAM`, `SLIM_SESSION`, `SLIM_HISTORY`, `SLIM_CONFIG`.
+Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_DB`, `SLIM_DRY_RUN_WRITES`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_STREAM`, `SLIM_SESSION`, `SLIM_HISTORY`, `SLIM_CONFIG`.
 
 Optional JSON `--config`:
 `base_url`, `fallback_url`, `model`, `fallback_model`, `data_dir`, `skills_dir`, `docs_dir`, `mqtt_http`, `allow_write`, `allow_mqtt`.
@@ -183,9 +183,13 @@ The C++ client prints the budget summary and the manifest per turn too, and its
 - RAG: FTS5 keyword search over `slim/skills`, `slim/docs`, `slim/data`
 - Tools (one JSON call then a final answer): `rag_search`, `read_file`, `write_file` (jailed, 8 KiB), `mqtt_publish` only if `SLIM_MQTT_HTTP` is set
 - Skills: `slim/skills/*.md` injected as text; scripts are not executed
-- Session turns stored in `slim/data/slim.sqlite` (protected by the policy above)
+- Session turns stored as append-only JSONL under `<data-dir>/sessions/`; the RAG corpus
+  is `<data-dir>/slim.sqlite` (SQLite FTS5, never writable through a tool)
 
 ## Tests
+
+All seven files together are **89 tests**; the one-shot form is
+`python3 -S -m unittest discover -s slim -p 'test_*.py'`.
 
 ```bash
 python3 -S slim/test_agent.py
@@ -209,18 +213,21 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 74 + 48 + 39 + 43 checks in four binaries
+make -C slim/cpp test        # 74 + 54 + 39 + 43 = 210 checks in four binaries
 ./slim/cpp/slim-agent --help
 ```
 
 T830 (OpenWrt musl gcc 9.3):
 
 ```bash
-make -C slim/cpp t830          # dynamic, stripped, 117 KB
-make -C slim/cpp t830-static   # self-contained, 694 KB, no NEEDED libs
+make -C slim/cpp t830          # dynamic, stripped, 121,736 bytes (~119 KB)
+make -C slim/cpp t830-static   # self-contained, 698,664 bytes (~682 KB), no NEEDED libs
 file slim/cpp/slim-agent-t830-static
 # ELF aarch64, statically linked, stripped, interpreter-less
 ```
+
+The current tree builds to `sha256 5de6ea50…` (static) - the same bytes that were run on
+the device, so a rebuild can be compared with the verified build before deploying.
 
 Two artifacts on purpose. `slim-agent-t830` is the small one and needs
 `libstdc++.so.6`, `libgcc_s.so.1` and `libc.so` on the device - OpenWrt images usually
@@ -275,10 +282,13 @@ Device facts measured on the box: OpenWrt 23.05.5, kernel 5.15.167,
 `/lib/ld-musl-aarch64.so.1` and `libstdc++.so.6.0.30` present (so the dynamic artifact runs
 too, but the static one needs nothing).
 
-Flags: `--base-url`, `--model`, `--once`, `--data-dir`, `--max-tokens`, the retry flags
-`--attempts`, `--retry-base-ms`, `--http-verbose`, `--stream`, `--dry-run-writes`, the
-session flags `--session`, `--history`, and the policy flags `--allow-write`,
-`--allow-mqtt`, `--non-interactive` / `--interactive`. The 270M-class local model does not
+Flags accepted by the C++ client (its `--help` prints a shorter summary): `--base-url`,
+`--fallback-url`, `--model`, `--fallback-model`, `--api-key`, `--data-dir`, `--skills-dir`,
+`--docs-dir`, `--mqtt-http`, `--max-tokens`, `--attempts`, `--retry-base-ms`,
+`--http-verbose`, `--stream`, `--dry-run-writes`, `--session`, `--history`, `--allow-write`,
+`--allow-mqtt`, `--non-interactive` / `--interactive`, `--once`, `--ingest-only`, `--help`.
+The Python client's `--help` lists its full set, which is the same plus `--config`, `--db`,
+`--timeout`, `--show-history`. The 270M-class local model does not
 emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write`, `/mqtt`,
 `/history`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
 `.md`/`.txt` (no SQLite in the C++ client).
