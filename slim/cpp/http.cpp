@@ -306,10 +306,11 @@ struct StreamState {
   bool emitted;      // at least one delta reached the user
   bool too_large;
   bool header_done;  // HTTP header/body boundary located
+  size_t body_off;   // offset of the first body byte (for error diagnostics)
   size_t fed;        // raw bytes already handed to the parser
 
   StreamState(DeltaFn d, void* c)
-      : on_delta(d), ctx(c), emitted(false), too_large(false), header_done(false), fed(0) {}
+      : on_delta(d), ctx(c), emitted(false), too_large(false), header_done(false), body_off(0), fed(0) {}
 };
 
 // Drain every complete payload currently queued in the parser.
@@ -335,6 +336,7 @@ bool stream_attempt(const std::string& url, const std::string& json, const std::
   s->emitted = false;
   s->too_large = false;
   s->header_done = false;
+  s->body_off = 0;
   s->fed = 0;
 
   OpenResult o = http_open_send(url, json, bearer, timeout_sec);
@@ -376,6 +378,7 @@ bool stream_attempt(const std::string& url, const std::string& json, const std::
       if (hlen == 0)
         continue;  // headers still incomplete: keep reading
       s->header_done = true;
+      s->body_off = hlen;
       s->fed = hlen;
     }
     if (s->raw.size() > s->fed) {
@@ -394,7 +397,17 @@ bool stream_attempt(const std::string& url, const std::string& json, const std::
     return false;
   }
   if (out->status < 200 || out->status >= 300) {
-    out->body = s->raw;
+    // Never hand the raw response (status line + headers + body) back as the answer:
+    // on the streaming path that text was printed to the user and appended to the
+    // session history as if the model had said it. Report a bounded server message.
+    std::ostringstream err;
+    err << "HTTP status " << out->status;
+    std::string msg;
+    if (s->body_off <= s->raw.size() &&
+        json_extract_string(s->raw.substr(s->body_off), "message", msg) && !msg.empty())
+      err << ": " << cap_prompt(msg, 200);
+    out->error = err.str();
+    out->body.clear();
     return false;
   }
   out->body = s->acc;

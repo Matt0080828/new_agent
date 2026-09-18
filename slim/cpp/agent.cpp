@@ -83,15 +83,17 @@ static std::string openai_chat(const Cfg& cfg, const std::string& url, const std
     r = http_post_json_retry(endpoint, js.str(), cfg.api_key, cfg.timeout, cfg.retry,
                              cfg.verbose_http);
   }
-  if (!r.error.empty() && r.body.empty())
-    throw std::runtime_error(r.error);
-  if (r.status && (r.status < 200 || r.status >= 300) && r.body.empty())
+  // A request that failed is never content. Checked before touching r.body: the
+  // streaming path used to fall through with the raw response in the body, which the
+  // caller then printed and recorded as the model's answer.
+  const bool bad_status = r.status && (r.status < 200 || r.status >= 300);
+  if (!r.error.empty() || bad_status)
     throw std::runtime_error(r.error.empty() ? "http error" : r.error);
   std::string content;
   if (cfg.stream) {
     content = r.body;
     if (content.empty())
-      throw std::runtime_error(r.error.empty() ? "empty stream" : r.error);
+      throw std::runtime_error("empty stream");
   } else {
     // Some servers answer with an event stream even when stream was not requested;
     // a plain "first content" extraction would then return only the first delta,
