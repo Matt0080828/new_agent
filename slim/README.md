@@ -1,7 +1,14 @@
 # t830-slim agent
 
 Stdlib rewrite: chat + SQLite FTS RAG + whitelist tools + markdown skills.
-Not Hermes. Not hardware-verified on T830.
+Not Hermes.
+
+The C++ client in `cpp/` is **verified on a real T830 CPE** (OpenWrt 23.05.5, aarch64 musl,
+`evb6990_cpe_mt7990_emmc`, no python3 in the image): pushed over adb, sha256-matched, and
+run on the device - slash commands with read-back, the session store, the change-queue dry
+run and every fail-closed refusal behaved, with `real 0m 0.00s` startup. A live model turn
+is the one thing still unverified there; "Deploy to the CPE" says why and gives the exact
+commands.
 
 ## Run
 
@@ -194,7 +201,7 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # tests/test_slim: 70 checks, tests/test_sse: 45 checks
+make -C slim/cpp test        # 74 + 48 + 39 + 43 checks in four binaries
 ./slim/cpp/slim-agent --help
 ```
 
@@ -217,14 +224,61 @@ build carried debug info and an `RPATH` pointing at the build machine's SDK path
 `-lgcc_eh` must come after the source files on the static link, otherwise the link fails
 with `undefined reference to _Unwind_Resume`.
 
-Copy `slim-agent-t830-static` (or `slim-agent-t830`) plus `slim/skills` onto the CPE. Flags:
-`--base-url`, `--model`, `--once`, `--data-dir`, `--max-tokens`, the retry flags
-`--attempts`, `--retry-base-ms`, `--http-verbose`, `--stream`, `--dry-run-writes`, and the
-policy flags `--allow-write`, `--allow-mqtt`, `--non-interactive` / `--interactive`. The
-270M-class local model does
-not emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write`,
-`/mqtt`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
-`.md`/`.txt` (no SQLite in the C++ client). Not hardware-verified on T830.
+## Deploy to the CPE, and what was verified there
+
+The C++ client is the only client that can run on the T830: the image ships **no python3**,
+so the Python agent is not a smaller option, it is no option.
+
+The reachable entry point is **adb over USB**, not the network: the management IP answers
+ARP but every TCP port is closed, `/dev/ttyACM*` are modem AT ports, and the RNDIS gadget
+does not hand out DHCP. On a host whose user is in the `docker` group, adb runs inside a
+privileged container, because the USB node is root-only:
+
+```bash
+docker run -d --name adb-t830-run --privileged -v /dev/bus/usb:/dev/bus/usb \
+  debian:bookworm-slim sleep infinity
+docker exec adb-t830-run bash -c 'apt-get update -qq && apt-get install -y -qq adb'
+docker exec adb-t830-run adb devices -l      # 0123456789ABCDEF  device  usb:1-7
+```
+
+`adb push` executes inside that container, so it cannot read host paths: `docker cp` the
+payload in first, push from inside, and **compare sha256 on both sides before running
+anything**. `run-on-t830.sh` in the deploy bundle does exactly that and then runs
+`on-device-smoke.sh`, which needs no network and keeps each run in its own
+`/tmp/slim-smoke/data-$$` directory.
+
+Verified on the device (static build, sha256-matched):
+
+| Check | Result on the CPE |
+| --- | --- |
+| `--help` | full flag list, `real 0m 0.00s` |
+| `/write note.txt ...` then read it back | file written, content read back |
+| `/history` | reports an empty session until a model turn is recorded |
+| `--dry-run-writes` | prints the manifest and writes nothing |
+| `sessions/...`, `*.sqlite`, `../escape` writes | all refused, with the expected wording |
+| unreachable model endpoint | 3 attempts, then fails: bounded retry, no loop |
+
+Device facts measured on the box: OpenWrt 23.05.5, kernel 5.15.167,
+`MediaTek evb6990_cpe_mt7990_emmc`, 1,736,840 kB RAM (1,183,552 kB available), `/tmp` tmpfs
+838 MB, `/overlay` 116 MB free, `/data` 12.5 GB, root shell, and both
+`/lib/ld-musl-aarch64.so.1` and `libstdc++.so.6.0.30` present (so the dynamic artifact runs
+too, but the static one needs nothing).
+
+Flags: `--base-url`, `--model`, `--once`, `--data-dir`, `--max-tokens`, the retry flags
+`--attempts`, `--retry-base-ms`, `--http-verbose`, `--stream`, `--dry-run-writes`, the
+session flags `--session`, `--history`, and the policy flags `--allow-write`,
+`--allow-mqtt`, `--non-interactive` / `--interactive`. The 270M-class local model does not
+emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write`, `/mqtt`,
+`/history`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
+`.md`/`.txt` (no SQLite in the C++ client).
+
+**Not yet verified on the device: a live model turn** (streaming output, and the session
+record that follows it). The CPE's LAN is `192.168.1.0/24` and has no route to the network
+the model server sits on, so an end-to-end call needs the model somewhere the CPE can
+reach: a server on its own LAN, or the USB gadget set up as a common subnet. The device has
+an `rndis0` gadget interface for that, but OpenWrt's netifd removes manually added
+addresses, so configure it through `uci` or set it inside the same shell invocation as the
+test.
 
 ## Out of scope
 
