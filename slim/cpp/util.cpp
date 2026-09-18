@@ -42,6 +42,45 @@ std::string json_escape(const std::string& s) {
   return o;
 }
 
+static bool hex4(const std::string& src, size_t i, unsigned& out) {
+  if (i + 4 > src.size())
+    return false;
+  unsigned v = 0;
+  for (int k = 0; k < 4; ++k) {
+    char h = src[i + k];
+    unsigned d;
+    if (h >= '0' && h <= '9')
+      d = (unsigned)(h - '0');
+    else if (h >= 'a' && h <= 'f')
+      d = (unsigned)(h - 'a' + 10);
+    else if (h >= 'A' && h <= 'F')
+      d = (unsigned)(h - 'A' + 10);
+    else
+      return false;
+    v = v * 16 + d;
+  }
+  out = v;
+  return true;
+}
+
+static void append_utf8(std::string& out, unsigned code) {
+  if (code < 0x80) {
+    out.push_back((char)code);
+  } else if (code < 0x800) {
+    out.push_back((char)(0xC0 | (code >> 6)));
+    out.push_back((char)(0x80 | (code & 0x3F)));
+  } else if (code < 0x10000) {
+    out.push_back((char)(0xE0 | (code >> 12)));
+    out.push_back((char)(0x80 | ((code >> 6) & 0x3F)));
+    out.push_back((char)(0x80 | (code & 0x3F)));
+  } else {
+    out.push_back((char)(0xF0 | (code >> 18)));
+    out.push_back((char)(0x80 | ((code >> 12) & 0x3F)));
+    out.push_back((char)(0x80 | ((code >> 6) & 0x3F)));
+    out.push_back((char)(0x80 | (code & 0x3F)));
+  }
+}
+
 static bool unescape_into(const std::string& src, size_t& i, std::string& out) {
   if (i >= src.size() || src[i] != '"')
     return false;
@@ -58,8 +97,26 @@ static bool unescape_into(const std::string& src, size_t& i, std::string& out) {
         out.push_back('\r');
       else if (e == 't')
         out.push_back('\t');
-      else
+      else if (e == 'u') {
+        // \uXXXX is one character. Servers that escape non-ASCII (Python's json.dumps
+        // does by default) would otherwise arrive as the literal text "u6eab" instead
+        // of the character, because the backslash is what makes it an escape.
+        unsigned code = 0;
+        if (hex4(src, i, code)) {
+          i += 4;
+          if (code >= 0xD800 && code <= 0xDBFF && i + 1 < src.size() && src[i] == '\\' &&
+              src[i + 1] == 'u') {
+            unsigned low = 0;
+            if (hex4(src, i + 2, low) && low >= 0xDC00 && low <= 0xDFFF) {
+              code = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+              i += 6;
+            }
+          }
+          append_utf8(out, code);
+        }
+      } else {
         out.push_back(e);
+      }
     } else {
       out.push_back(c);
     }

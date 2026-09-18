@@ -11,7 +11,7 @@ python3 -S slim/agent.py --ingest-only
 python3 -S slim/agent.py --base-url http://127.0.0.1:8080/v1 --model tiny --once 'what is this device'
 ```
 
-Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_STREAM`, `SLIM_CONFIG`.
+Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_STREAM`, `SLIM_SESSION`, `SLIM_HISTORY`, `SLIM_CONFIG`.
 
 Optional JSON `--config`:
 `base_url`, `fallback_url`, `model`, `fallback_model`, `data_dir`, `skills_dir`, `docs_dir`, `mqtt_http`, `allow_write`, `allow_mqtt`.
@@ -98,6 +98,41 @@ python3 -S slim/agent.py --stream --once 'status'
 - If a server answers with an event stream even though `stream` was not requested, the
   non-streaming path assembles the data lines instead of returning only the first delta.
 
+## Sessions
+
+A session is an append-only JSONL file, one turn per line:
+
+```json
+{"ts":"2026-09-18T04:09:45Z","role":"user","text":"溫度 25.5°C 是什麼"}
+```
+
+```bash
+python3 -S slim/agent.py --session boiler --history 8 --once 'status'
+python3 -S slim/agent.py --session boiler --show-history
+./slim/cpp/slim-agent --session boiler --history 8 --once 'status'
+./slim/cpp/slim-agent --session boiler --once '/history'
+```
+
+- Stored under `<data-dir>/sessions/<name>.jsonl`, mode `0600`. The name is validated
+  before it becomes a file name (`..`, `/`, a leading dot and more than 64 characters
+  are refused), so it cannot be used to leave the data directory.
+- Both clients write the same bytes, so a session started with one can be continued
+  with the other, and non-ASCII text is stored raw (never `\u`-escaped) so either
+  reader gets the characters back.
+- `--history N` replays the last N turns into the prompt before the new question, which
+  is what makes a session resumable rather than a log nobody reads. `0` replays
+  nothing, `-1` replays everything; the default is 6.
+- **The store is not writable through a tool.** `write_file` refuses any path with a
+  `sessions` component, in both clients, even with `--allow-write`: history the model can
+  rewrite is not history.
+- Reading is tolerant: a truncated or hand-edited line is skipped, because a broken tail
+  must not lock the operator out of their own history. A failed *write* is reported on
+  stderr and does not kill the turn - losing history is bad, losing the answer that was
+  asked for is worse.
+- The same JSON decode handles `\uXXXX` (and surrogate pairs) as UTF-8, so a server that
+  escapes non-ASCII (Python's `json.dumps` does by default) does not turn `溫度` into
+  `u6eabu5ea6`.
+
 ## Features
 
 - Chat via OpenAI-compatible HTTP; fallback URL on request failure
@@ -116,12 +151,14 @@ python3 -S slim/test_tools.py
 python3 -S slim/test_policy.py   # policy + the state-file regression
 python3 -S slim/test_retry.py    # retry policy + "mqtt is never retried"
 python3 -S slim/test_sse.py      # SSE parser, streaming and "no retry after a delta"
+python3 -S slim/test_session.py  # session store, format compatibility with the C++ client
 ```
 
 `test_policy.py` includes the regression that matters most: open the default-layout
 database, attempt `write_file slim.sqlite`, and assert the database still reads back.
 `test_sse.py` covers the SSE parser at every chunk split, the incremental-delivery
-ordering guarantee, and a real loopback socket.
+ordering guarantee, and a real loopback socket. `test_session.py` pins the line format
+both clients must agree on, the tolerant reader, and the `\uXXXX` decode.
 
 ## C++ executable (same features)
 

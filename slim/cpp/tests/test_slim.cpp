@@ -109,9 +109,14 @@ static void test_protected_path() {
   check(protected_path("x.db-journal", why), "sqlite journal protected");
   check(protected_path(".hidden", why), "dotfiles protected");
   check(protected_path("slim-agent", why), "agent binary name protected");
+  // The session store is append-only agent state and lives inside the write jail.
+  check(protected_path("sessions/default.jsonl", why), "session file protected");
+  check(protected_path("sessions", why), "session directory protected");
+  check(protected_path("sub/sessions/x.jsonl", why), "a nested sessions path is protected");
   check(!protected_path("notes.md", why), "notes.md allowed");
   check(!protected_path("sub/dir/notes.txt", why), "nested .txt allowed");
   check(!protected_path("data.bin", why), "data.bin allowed");
+  check(!protected_path("my-sessions.md", why), "a name containing 'sessions' is not a session dir");
 }
 
 static void test_approval() {

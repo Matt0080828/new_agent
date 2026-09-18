@@ -23,12 +23,34 @@ const char* const kStateSuffixes[] = {
 
 const char* const kBinaryNames[] = {"slim-agent", "slim-agent-t830"};
 
+// A session directory holds append-only conversation state. write_file is jailed to
+// data_dir, which is also where sessions live, so without this rule the model could
+// rewrite its own history (or a session name could be used to escape the jail).
+bool has_path_component(const std::string& rel, const std::string& component) {
+  size_t start = 0;
+  while (start <= rel.size()) {
+    size_t slash = rel.find('/', start);
+    std::string part =
+        rel.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
+    if (part == component)
+      return true;
+    if (slash == std::string::npos)
+      break;
+    start = slash + 1;
+  }
+  return false;
+}
+
 }  // namespace
 
 bool protected_path(const std::string& rel, std::string& why) {
   std::string base = basename_of(rel);
   if (base.empty()) {
     why = "path has no file name";
+    return true;
+  }
+  if (has_path_component(rel, "sessions")) {
+    why = "refusing to write " + rel + ": the session store is append-only agent state";
     return true;
   }
   for (size_t i = 0; i < sizeof(kStateSuffixes) / sizeof(kStateSuffixes[0]); ++i) {

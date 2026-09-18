@@ -1,10 +1,9 @@
 CXX ?= g++
 CXXFLAGS ?= -O2 -std=c++11 -Wall
-SRCS = agent.cpp http.cpp util.cpp policy.cpp sse.cpp
-CORE = util.cpp policy.cpp http.cpp sse.cpp
+SRCS = agent.cpp http.cpp util.cpp policy.cpp sse.cpp session.cpp
+CORE = util.cpp policy.cpp http.cpp sse.cpp session.cpp
 BIN = slim-agent
-TESTBIN = tests/test_slim
-TESTSSE = tests/test_sse
+TESTS = tests/test_slim tests/test_sse tests/test_session
 
 TC ?= /media/matt/D/public/fg370-t830-sdk_v1016/mtk_src/mtk/prebuilt/openwrt-toolchain/arm64-a55_neon-gcc-9.3.0_musl
 CROSS_CXX = $(TC)/bin/aarch64-openwrt-linux-musl-g++
@@ -25,16 +24,12 @@ $(CROSS_BIN): $(SRCS)
 	STAGING_DIR=$(TC) $(CROSS_CXX) $(CXXFLAGS) -o $@ $(SRCS)
 
 # Host-only: the core is platform independent, and these tests pin the regressions
-# that shipped in 3eaa62e plus the SSE/streaming contract.
-test: $(TESTBIN) $(TESTSSE)
-	./$(TESTBIN)
-	./$(TESTSSE)
+# that shipped in 3eaa62e plus the SSE/streaming and session contracts.
+test: $(TESTS)
+	@for t in $(TESTS); do echo "== $$t"; ./$$t || exit 1; done
 
-$(TESTBIN): tests/test_slim.cpp $(CORE)
-	$(CXX) $(CXXFLAGS) -o $@ tests/test_slim.cpp $(CORE)
-
-$(TESTSSE): tests/test_sse.cpp $(CORE)
-	$(CXX) $(CXXFLAGS) -o $@ tests/test_sse.cpp $(CORE)
+$(TESTS): %: %.cpp $(CORE)
+	$(CXX) $(CXXFLAGS) -o $@ $< $(CORE)
 
 clean:
-	rm -f $(BIN) $(CROSS_BIN) $(TESTBIN) $(TESTSSE)
+	rm -f $(BIN) $(CROSS_BIN) $(TESTS)

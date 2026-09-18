@@ -20,6 +20,7 @@ from error import SlimError
 from policy import approve_tool
 from retry import DEFAULT_ATTEMPTS, DEFAULT_BASE_DELAY, DEFAULT_MAX_TOTAL, run_with_retry
 from rag import connect, ingest_tree, log_turn, search
+from session import session_append, session_load, session_path, valid_session_name
 from skills import format_skills, load_skills
 from sse import assemble
 from stream import stream_completion
@@ -40,6 +41,18 @@ def _die(msg, code=2):
 def _retry_log(line):
     """Audit line for each transport attempt (stderr, one per line)."""
     sys.stderr.write(line + "\n")
+
+
+def _record_turn(cfg, role, text):
+    """Append one turn to the session store. A failing store is reported but never
+    kills the turn: losing history is bad, losing the answer that was asked for is
+    worse."""
+    path = cfg.get("session_file")
+    if not path:
+        return
+    ok, why = session_append(path, role, text)
+    if not ok:
+        sys.stderr.write("[slim] session: %s\n" % why)
 
 
 def _stream_to_stdout():
@@ -183,10 +196,13 @@ def run_turn(user_text, cfg, conn):
     streaming = bool(cfg.get("stream"))
     emit = _stream_to_stdout() if streaming else None
     skills = load_skills(cfg["skills_dir"])
-    messages = [
-        {"role": "system", "content": system_prompt(format_skills(skills))},
-        {"role": "user", "content": user_text},
-    ]
+    messages = [{"role": "system", "content": system_prompt(format_skills(skills))}]
+    # Replay the stored session first: that is what makes it resumable rather than a
+    # log nobody reads.
+    for turn in session_load(cfg.get("session_file", ""), cfg.get("history", 0)):
+        messages.append({"role": "assistant" if turn["role"] == "assistant" else "user",
+                         "content": turn["text"]})
+    messages.append({"role": "user", "content": user_text})
     hits = search(conn, user_text, limit=3)
     if hits:
         blob = json.dumps(hits, ensure_ascii=False)
@@ -239,6 +255,8 @@ def run_turn(user_text, cfg, conn):
         )
     log_turn(conn, "user", user_text)
     log_turn(conn, "assistant", reply)
+    _record_turn(cfg, "user", user_text)
+    _record_turn(cfg, "assistant", reply)
     # With streaming the deltas were already written to stdout, so the caller must
     # not print the text a second time.
     return "" if streaming else reply
@@ -285,6 +303,12 @@ def _parse_args(argv):
     p.add_argument("--stream", action="store_true",
                    default=os.environ.get("SLIM_STREAM", "") == "1",
                    help="print tokens as they arrive (SSE); retry stops once output was shown")
+    p.add_argument("--session", default=os.environ.get("SLIM_SESSION", "default"),
+                   help="session name; turns go to <data-dir>/sessions/<name>.jsonl")
+    p.add_argument("--history", type=int, default=int(os.environ.get("SLIM_HISTORY", 6)),
+                   help="how many stored turns to replay into the prompt (default 6)")
+    p.add_argument("--show-history", action="store_true",
+                   help="print the stored turns for this session and exit")
     p.add_argument("--once", default="", help="single prompt then exit")
     p.add_argument("--ingest-only", action="store_true")
     return p.parse_args(argv)
@@ -320,12 +344,19 @@ def build_cfg(args):
         },
         "http_verbose": bool(args.http_verbose or file_cfg.get("http_verbose")),
         "stream": bool(args.stream or file_cfg.get("stream")),
+        "session": str(args.session or file_cfg.get("session") or "default"),
+        "history": max(0, int(args.history)),
         "retry": {
             "attempts": max(1, int(args.attempts)),
             "base_delay": max(0.0, args.retry_base_ms / 1000.0),
             "max_total": float(os.environ.get("SLIM_RETRY_MAX_TOTAL_S", 20.0)),
         },
     }
+    # The session name becomes a file name: validate before it is used, fail closed.
+    ok, why = valid_session_name(cfg["session"])
+    if not ok:
+        _die("bad --session: %s" % why)
+    cfg["session_file"] = session_path(data_dir, cfg["session"])
     return cfg
 
 
@@ -340,6 +371,13 @@ def main(argv=None):
     ingest_tree(conn, cfg["data_dir"], prefix="data")
     if args.ingest_only:
         print("ingested into %s" % cfg["db"])
+        return 0
+    if args.show_history:
+        turns = session_load(cfg["session_file"], cfg["history"])
+        if not turns:
+            print("no turns recorded yet in %s" % cfg["session_file"])
+        for turn in turns:
+            print("%s  %s: %s" % (turn["ts"], turn["role"], turn["text"]))
         return 0
     if not cfg["base_url"]:
         _die("set --base-url or SLIM_BASE_URL")

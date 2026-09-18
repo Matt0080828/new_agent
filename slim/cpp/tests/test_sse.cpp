@@ -144,6 +144,24 @@ static void test_assemble_whole_body() {
   check(!sse_assemble("", out), "empty body");
 }
 
+static void test_unicode_escapes_in_a_delta() {
+  std::cout << "-- \\u escapes in a delta\n";
+  // A server that escapes non-ASCII (Python's json.dumps does by default) must still
+  // deliver the characters. Before this was handled, the backslash was consumed and
+  // the text arrived as the literal "u6eab".
+  SseParser p;
+  p.feed("data: {\"choices\":[{\"delta\":{\"content\":\"\\u6eab\\u5ea6 25.5\\u00b0C\"}}]}\n\n");
+  std::string payload, delta;
+  check(p.next(&payload) && sse_delta_content(payload, delta), "escaped delta extracted");
+  check(delta == "\xe6\xba\xab\xe5\xba\xa6 25.5\xc2\xb0" "C",
+        "\\uXXXX arrives as UTF-8, not as 'u6eabu5ea6'");
+
+  SseParser q;
+  q.feed("data: {\"choices\":[{\"delta\":{\"content\":\"\\ud83d\\ude00\"}}]}\n\n");
+  check(q.next(&payload) && sse_delta_content(payload, delta) && delta == "\xf0\x9f\x98\x80",
+        "a surrogate pair decodes to one code point");
+}
+
 // ---------------------------------------------------------------------------
 // Fake HTTP server (loopback, forked)
 // ---------------------------------------------------------------------------
@@ -400,6 +418,7 @@ int main() {
   test_parser_flush_and_reset();
   test_delta_content();
   test_assemble_whole_body();
+  test_unicode_escapes_in_a_delta();
   test_plain_json_request_round_trip();
   test_stream_round_trip();
   test_stream_without_done();

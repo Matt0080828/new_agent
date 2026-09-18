@@ -1,5 +1,6 @@
 #include "http.hpp"
 #include "policy.hpp"
+#include "session.hpp"
 #include "sse.hpp"
 #include "util.hpp"
 
@@ -31,6 +32,9 @@ struct Cfg {
   RetryPolicy retry;
   bool verbose_http;
   bool stream;
+  std::string session;       // --session NAME / SLIM_SESSION
+  std::string session_file;  // <data_dir>/sessions/<name>.jsonl
+  int history;               // --history N: how many turns to replay into the prompt
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -307,7 +311,17 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
   std::string rest;
   std::string cmd = first_word(line, rest);
   if (cmd == "/help" || cmd == "/h")
-    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\nplain text goes to the LLM";
+    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\n/history\nplain text goes to the LLM";
+  if (cmd == "/history" || cmd == "/hist") {
+    std::vector<Turn> turns = session_load(cfg.session_file, cfg.history);
+    if (turns.empty())
+      return "no turns recorded yet in " + cfg.session_file;
+    std::ostringstream out;
+    for (size_t i = 0; i < turns.size(); ++i)
+      out << turns[i].ts << "  " << turns[i].role << ": " << turns[i].text << "\n";
+    out << "(" << turns.size() << " turn(s) from " << cfg.session_file << ")";
+    return out.str();
+  }
   if (cmd == "/rag") {
     std::ostringstream js;
     js << "{\"query\":\"" << json_escape(rest) << "\"}";
@@ -335,6 +349,16 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
   return "unknown command; /help";
 }
 
+// A failing session store must be visible, but it must not kill the turn: losing
+// history is bad, losing the answer the operator asked for is worse.
+static void record_turn(const Cfg& cfg, const std::string& role, const std::string& text) {
+  if (cfg.session_file.empty())
+    return;
+  std::string why;
+  if (!session_append(cfg.session_file, role, text, why))
+    std::cerr << "[slim] session: " << why << "\n";
+}
+
 static std::string run_turn(const Cfg& cfg, const std::string& user) {
   std::string u = trim_copy(user);
   if (!u.empty() && u[0] == '/')
@@ -342,9 +366,18 @@ static std::string run_turn(const Cfg& cfg, const std::string& user) {
   if (cfg.base_url.empty() || cfg.model.empty())
     throw std::runtime_error("set --base-url and --model, or use /rag /read /write");
   std::vector<std::pair<std::string, std::string> > msgs;
+  // Replay the session first: that is what makes a session resumable after a reboot,
+  // rather than a log nobody reads.
+  std::vector<Turn> history = session_load(cfg.session_file, cfg.history);
+  for (size_t i = 0; i < history.size(); ++i)
+    msgs.push_back(std::make_pair(history[i].role == "assistant" ? std::string("assistant")
+                                                                : std::string("user"),
+                                  history[i].text));
   msgs.push_back(std::make_pair(std::string("user"),
                                 std::string("Q: ") + cap_prompt(u, kMaxPrompt) + "\nA:"));
   std::string reply = chat_fallback(cfg, msgs);
+  record_turn(cfg, "user", u);
+  record_turn(cfg, "assistant", reply);
   if (cfg.stream)
     return std::string();  // the deltas were already printed live
   return sanitize_reply(reply);
@@ -364,6 +397,7 @@ static void usage() {
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
             << "  stream: --stream prints tokens as they arrive (SLIM_STREAM=1)\n"
+            << "  session: --session NAME --history N (default 6; 0 replays nothing, -1 all)\n"
             << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
             << "         retries transport errors, 429 and 5xx; mutations are never retried\n"
             << "  policy: model-initiated writes/publishes are denied unless enabled\n"
@@ -397,6 +431,13 @@ int main(int argc, char** argv) {
   cfg.policy.interactive = isatty(0) != 0;
   cfg.stream = env_or("SLIM_STREAM", "") == "1";
   cfg.verbose_http = env_or("SLIM_HTTP_VERBOSE", "") == "1";
+  cfg.session = env_or("SLIM_SESSION", "default");
+  cfg.history = 6;
+  {
+    std::string h = env_or("SLIM_HISTORY", "");
+    if (!h.empty())
+      cfg.history = atoi(h.c_str());
+  }
   {
     std::string a = env_or("SLIM_ATTEMPTS", "");
     if (!a.empty())
@@ -448,7 +489,13 @@ int main(int argc, char** argv) {
       cfg.verbose_http = true;
     else if (a == "--stream")
       cfg.stream = true;
-    else if (a == "--allow-write")
+    else if (a == "--session")
+      need(cfg.session);
+    else if (a == "--history") {
+      std::string v;
+      need(v);
+      cfg.history = atoi(v.c_str());
+    } else if (a == "--allow-write")
       cfg.policy.allow_write = true;
     else if (a == "--allow-mqtt")
       cfg.policy.allow_mqtt = true;
@@ -467,6 +514,12 @@ int main(int argc, char** argv) {
       die("unknown arg " + a);
   }
   mkdir(cfg.data_dir.c_str(), 0755);
+  {
+    std::string why;
+    if (!valid_session_name(cfg.session, why))
+      die("bad --session: " + why, 2);
+    cfg.session_file = session_path(cfg.data_dir, cfg.session);
+  }
   if (ingest_only) {
     std::vector<std::pair<std::string, std::string> > files;
     list_text_files(cfg.skills_dir, "skill", files);

@@ -29,9 +29,16 @@ _BINARY_NAMES = ("slim-agent", "slim-agent-t830")
 
 def protected_path(rel):
     """Return a reason string when rel must never be written, else None."""
-    base = os.path.basename((rel or "").replace("\\", "/"))
+    normalized = (rel or "").replace("\\", "/")
+    base = os.path.basename(normalized)
     if not base:
         return "path has no file name"
+    # write_file is jailed to data_dir, and sessions live under data_dir: without this
+    # rule the model could rewrite its own conversation history.
+    parts = [p for p in normalized.split("/") if p not in ("", ".")]
+    if "sessions" in parts:
+        return ("refusing to write %s: the session store is append-only agent state"
+                % normalized)
     for suffix in _STATE_SUFFIXES:
         if base.endswith(suffix):
             return ("refusing to write %s: looks like an agent state/database file (%s)"

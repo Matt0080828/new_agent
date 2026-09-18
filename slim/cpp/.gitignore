@@ -3,3 +3,4 @@ slim-agent
 slim-agent-t830
 tests/test_slim
 tests/test_sse
+tests/test_session
