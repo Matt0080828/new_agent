@@ -336,6 +336,82 @@ I don't remember specific numbers or details from previous conversations once th
 Those three turns left `live.jsonl` (mode `0600`) holding six lines - `user`, `assistant`,
 three times over - in the JSONL format above.
 
+### Install it so it survives a reboot, and configure it
+
+`/tmp` is tmpfs, so the copy `run-on-t830.sh` pushes is gone after a reboot. Installing means
+putting the binary on a persistent filesystem and giving the agent a writable data directory.
+Measured on the device: `/overlay` (`/dev/loop0`, ext4) has 116 MB free and `/data`
+(`/dev/block/user_data`, ext4) 12.5 GB, and neither is mounted `noexec` - the binary runs from
+either (verified: `--help` from `/data/slim` exits 0).
+
+```bash
+docker cp slim/cpp/slim-agent-t830-static adb-t830-run:/tmp/stage-binary
+docker exec adb-t830-run adb shell 'mkdir -p /data/slim/skills /data/slim/docs /data/slim/data &&
+  cp /tmp/stage-binary /data/slim/slim-agent && chmod 755 /data/slim/slim-agent'
+docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still 5de6ea50...
+docker exec adb-t830-run adb shell 'cd /data/slim && ./slim-agent --help | head -3'
+```
+
+That install is 700 KB. Keep the corpus and the sessions on `/data` (the roomier one) and the
+binary wherever you like.
+
+The C++ client has **no config file**: flags and environment only, and **a flag beats the
+environment** (verified on the device - `SLIM_SESSION=envsess` plus `--session flagwins`
+created `flagwins.jsonl`). Every setting it understands, with the real defaults from
+`agent.cpp`:
+
+| Setting | Flag | Environment | Default |
+| --- | --- | --- | --- |
+| Model endpoint | `--base-url` | `SLIM_BASE_URL` | empty - a model turn needs it |
+| Fallback endpoint | `--fallback-url` | `SLIM_FALLBACK_URL` | empty |
+| Model id | `--model` | `SLIM_MODEL` | empty |
+| Fallback model | `--fallback-model` | `SLIM_FALLBACK_MODEL` | empty |
+| API key | `--api-key` | `SLIM_API_KEY` | empty (LM Studio wants none) |
+| Data dir: sessions, scratch | `--data-dir` | `SLIM_DATA_DIR` | `./slim/data`, **relative to the working directory** |
+| Markdown skills | `--skills-dir` | `SLIM_SKILLS_DIR` | `./slim/skills` |
+| RAG corpus | `--docs-dir` | `SLIM_DOCS_DIR` | `./slim/docs` |
+| MQTT bridge | `--mqtt-http` | `SLIM_MQTT_HTTP` | empty - `/mqtt` stays unavailable |
+| Session name | `--session` | `SLIM_SESSION` | `default` |
+| Replayed turns | `--history` | `SLIM_HISTORY` | `6` (`0` none, negative every turn) |
+| Reply cap | `--max-tokens` | `SLIM_MAX_TOKENS` | `64` |
+| Streaming | `--stream` | `SLIM_STREAM=1` | off |
+| Model may write files | `--allow-write` | `SLIM_ALLOW_WRITE=1` | off, denied |
+| Model may publish | `--allow-mqtt` | `SLIM_ALLOW_MQTT=1` | off, denied |
+| Approval prompt | `--non-interactive` / `--interactive` | - | on only when stdin is a tty, otherwise deny |
+| Stage writes, write nothing | `--dry-run-writes` | `SLIM_DRY_RUN_WRITES=1` | off |
+| Retry budget | `--attempts`, `--retry-base-ms` | `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS` | `3`, `500` ms |
+| Per-attempt log | `--http-verbose` | `SLIM_HTTP_VERBOSE=1` | off |
+| Socket timeout | - | - | compiled in, `120` s |
+
+(The Python client reads a few more - `SLIM_DB`, `SLIM_CONFIG`, `SLIM_TIMEOUT`,
+`SLIM_RETRY_MAX_TOTAL_S` - which the C++ build does not know.)
+
+Those relative defaults are the trap worth knowing: run the binary from the read-only root and
+`./slim/data` cannot be created, so turns are answered but never recorded. Always pass
+`--data-dir` (as above), and `--skills-dir` / `--docs-dir` when the corpus lives elsewhere.
+On the device a wrapper beats a long command line:
+
+```bash
+cat > /data/slim/run <<'EOF'
+#!/bin/sh
+# All configuration lives here; anything passed on the command line still wins.
+BASE=http://192.168.1.210:1234/v1        # the machine serving the model
+MODEL=qwen2.5-7b-instruct-1m
+DIR=/data/slim
+exec "$DIR/slim-agent" \
+  --data-dir "$DIR/data" --skills-dir "$DIR/skills" --docs-dir "$DIR/docs" \
+  --base-url "$BASE" --model "$MODEL" --non-interactive --history 6 "$@"
+EOF
+chmod +x /data/slim/run
+/data/slim/run --once 'what is this device'
+/data/slim/run --once '/rag openwrt'       # search the corpus you put in docs/
+```
+
+Adding `--allow-write` to that call is the only way the model may write, and even then never to
+the session store, any `*.sqlite`, or outside the data directory. To update, push the new
+binary over `/data/slim/slim-agent` after comparing its sha256, and leave the data directory
+alone - that is where the sessions are.
+
 Verified on the device (static build, sha256-matched):
 
 | Check | Result on the CPE |
