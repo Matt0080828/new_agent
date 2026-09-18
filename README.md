@@ -1,5 +1,7 @@
 # t830-slim-agent
 
+English | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
+
 A small agent that runs on the Askey T830 / Fibocom FG370 CPE (OpenWrt 23.05.5, aarch64 musl,
 **no python3 in the image**): chat over an OpenAI-compatible endpoint, keyword RAG over
 markdown, a whitelist tool layer, markdown skills - and a fail-closed policy in front of
