@@ -6,9 +6,17 @@ Not Hermes.
 The C++ client in `cpp/` is **verified on a real T830 CPE** (OpenWrt 23.05.5, aarch64 musl,
 `evb6990_cpe_mt7990_emmc`, no python3 in the image): pushed over adb, sha256-matched, and
 run on the device - slash commands with read-back, the session store, the change-queue dry
-run and every fail-closed refusal behaved, with `real 0m 0.00s` startup. A live model turn
-is the one thing still unverified there; "Deploy to the CPE" says why and gives the exact
-commands.
+run and every fail-closed refusal behaved, with `real 0m 0.00s` startup. Live model turns are
+verified there as well: a streamed answer from a model server on the LAN, the session file it
+records, history replay that recalled a number from an earlier turn, and `--history 0` as the
+negative control - "Deploy to the CPE" has the commands and the full table.
+
+This is a standalone project (not a Hermes or IoT fork): clone it and build it with
+
+```bash
+git clone https://github.com/Matt0080828/t830-slim-agent.git && cd t830-slim-agent/slim/cpp
+make && make test        # host build + the four C++ test binaries
+```
 
 ## Run
 
@@ -225,6 +233,9 @@ build carried debug info and an `RPATH` pointing at the build machine's SDK path
 with `undefined reference to _Unwind_Resume`.
 
 ## Deploy to the CPE, and what was verified there
+
+Everything below assumes a clone of <https://github.com/Matt0080828/t830-slim-agent>
+(this README is that repository's `slim/README.md`).
 
 The C++ client is the only client that can run on the T830: the image ships **no python3**,
 so the Python agent is not a smaller option, it is no option.
