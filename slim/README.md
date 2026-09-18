@@ -272,13 +272,25 @@ emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write
 `/history`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
 `.md`/`.txt` (no SQLite in the C++ client).
 
-**Not yet verified on the device: a live model turn** (streaming output, and the session
-record that follows it). The CPE's LAN is `192.168.1.0/24` and has no route to the network
-the model server sits on, so an end-to-end call needs the model somewhere the CPE can
-reach: a server on its own LAN, or the USB gadget set up as a common subnet. The device has
-an `rndis0` gadget interface for that, but OpenWrt's netifd removes manually added
-addresses, so configure it through `uci` or set it inside the same shell invocation as the
-test.
+**Verified on the device: a live model turn.** With the host PC on the CPE's LAN
+(`br-lan 192.168.1.0/24`), LM Studio on the host is reachable from the CPE and both builds
+answer through it:
+
+| Check | Result on the CPE |
+| --- | --- |
+| streamed turn (`--stream`, static build) | `qwen2.5-7b-instruct-1m` answered; first turn 54-63 s including the model load |
+| session record | `sessions/live.jsonl`, mode 600, one JSON object per line |
+| history replay (`--history 6`, dynamic build) | a later turn answered `7391` - the number the first turn was asked to remember |
+| `--history 0` | the same question answered `42` instead, so replay really is off |
+| failing model (the server answers 400) | reports `HTTP status 400: <server message>` and writes no session file |
+
+The earlier "no route to the model server" note is resolved by putting the host on the CPE's
+LAN. The `rndis0` gadget remains an option, but OpenWrt's netifd removes manually added
+addresses, so it has to be configured through `uci` or inside the same shell invocation.
+
+Turn latency with a shared LM Studio is 45-63 s, and a device-side timeout shorter than the
+server needs cuts the turn mid-prefill (LM Studio logs `Client disconnected. Stopping
+generation...`); give it 300-420 s.
 
 ## Out of scope
 
