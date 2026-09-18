@@ -1,9 +1,15 @@
-"""Whitelist tools. Paths stay under data_dir. No shell."""
+"""Whitelist tools. Paths stay under data_dir. No shell.
+
+Writes additionally go through the policy module: agent state (databases and
+similar) is never writable, whoever asks, because one write_file call used to be
+able to overwrite the agent's own database inside data_dir.
+"""
 import json
 import os
 import urllib.error
 import urllib.request
 
+from policy import protected_path
 from rag import search as rag_search
 
 MAX_WRITE = 8 * 1024
@@ -37,7 +43,11 @@ def run_tool(name, args, conn, data_dir, mqtt_http=""):
         with open(full, "r", encoding="utf-8", errors="replace") as fh:
             return fh.read(MAX_READ)
     if name == "write_file":
-        full = _jail(data_dir, args.get("path") or "")
+        rel = args.get("path") or ""
+        full = _jail(data_dir, rel)
+        reason = protected_path(rel)
+        if reason:
+            raise ValueError(reason)
         content = args.get("content") or ""
         if len(content) > MAX_WRITE:
             raise ValueError("write over %s bytes" % MAX_WRITE)

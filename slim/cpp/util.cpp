@@ -8,6 +8,19 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+bool has_suffix(const std::string& s, const std::string& suffix) {
+  if (suffix.empty())
+    return true;
+  return s.size() >= suffix.size() &&
+         s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string cap_prompt(const std::string& s, size_t max_chars) {
+  if (s.size() <= max_chars)
+    return s;
+  return s.substr(0, max_chars) + "\n[truncated]";
+}
+
 std::string json_escape(const std::string& s) {
   std::string o;
   o.reserve(s.size() + 8);
@@ -167,7 +180,10 @@ static void walk(const std::string& dir, const std::string& prefix,
     if (S_ISDIR(st.st_mode))
       walk(full, rel, out);
     else if (S_ISREG(st.st_mode)) {
-      if (name.size() >= 3 && (name.substr(name.size() - 3) == ".md" || name.substr(name.size() - 4) == ".txt"))
+      // Regression: this used to be an inline substr(name.size() - 4) behind a
+      // size() >= 3 guard, so a 3-character file name underflowed size_t and
+      // killed the process with std::out_of_range on ingest and on every search.
+      if (has_suffix(name, ".md") || has_suffix(name, ".txt"))
         out.push_back(std::make_pair(rel, read_file_limited(full, 64 * 1024)));
     }
   }

@@ -1,4 +1,5 @@
 #include "http.hpp"
+#include "policy.hpp"
 #include "util.hpp"
 
 #include <cstdlib>
@@ -7,11 +8,11 @@
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 static const size_t kMaxWrite = 8 * 1024;
 static const size_t kMaxPrompt = 6000;
-static const int kMaxHistory = 6;
 
 struct Cfg {
   std::string base_url;
@@ -25,6 +26,9 @@ struct Cfg {
   std::string mqtt_http;
   int max_tokens;
   int timeout;
+  Policy policy;
+  RetryPolicy retry;
+  bool verbose_http;
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -40,7 +44,9 @@ static std::string env_or(const char* k, const std::string& d) {
 static std::string openai_chat(const Cfg& cfg, const std::string& url, const std::string& model,
                                const std::vector<std::pair<std::string, std::string> >& msgs) {
   std::ostringstream js;
-  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":false,\"max_tokens\":" << cfg.max_tokens
+  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":false,\"temperature\":0"
+     << ",\"max_tokens\":" << cfg.max_tokens
+     << ",\"stop\":[\"\\nuser\",\"\\nassistant\",\"\\nmodel\",\"<start_of_turn>\",\"\\n- No\"]"
      << ",\"messages\":[";
   for (size_t i = 0; i < msgs.size(); ++i) {
     if (i)
@@ -50,7 +56,11 @@ static std::string openai_chat(const Cfg& cfg, const std::string& url, const std
   }
   js << "]}";
   std::string endpoint = join_url(url, "/chat/completions");
-  HttpResult r = http_post_json(endpoint, js.str(), cfg.api_key, cfg.timeout);
+  // Retried: a completion request has no lasting server-side effect, so repeating
+  // it after a transport error or a 5xx is safe. Mutations are never retried (see
+  // the mqtt_publish branch of run_tool).
+  HttpResult r = http_post_json_retry(endpoint, js.str(), cfg.api_key, cfg.timeout,
+                                      cfg.retry, cfg.verbose_http);
   if (!r.error.empty() && r.body.empty())
     throw std::runtime_error(r.error);
   if (r.status && (r.status < 200 || r.status >= 300) && r.body.empty())
@@ -71,22 +81,9 @@ static std::string chat_fallback(const Cfg& cfg, const std::vector<std::pair<std
   }
 }
 
-static void trim(std::vector<std::pair<std::string, std::string> >& msgs) {
-  while (!msgs.empty()) {
-    size_t n = 0;
-    for (size_t i = 0; i < msgs.size(); ++i)
-      n += msgs[i].second.size();
-    if (n <= kMaxPrompt)
-      break;
-    if (msgs.size() > 2 && msgs[0].first == "system")
-      msgs.erase(msgs.begin() + 1);
-    else if (msgs.size() > 1)
-      msgs.erase(msgs.begin());
-    else
-      break;
-  }
-}
-
+// History trimming used to live here. It became unreachable when model tool
+// calls were dropped (every turn is now a single user message), so the size
+// guard moved to cap_prompt() in util.cpp, where it has a unit test.
 struct Hit {
   std::string path;
   std::string snippet;
@@ -132,33 +129,73 @@ static std::vector<Hit> rag_search(const Cfg& cfg, const std::string& q, int lim
   return hits;
 }
 
-static std::string skills_blob(const Cfg& cfg) {
-  std::vector<std::pair<std::string, std::string> > files;
-  list_text_files(cfg.skills_dir, "", files);
-  if (files.empty())
-    return "";
-  std::ostringstream o;
-  o << "Available skills (markdown only, do not execute):\n";
-  for (size_t i = 0; i < files.size() && i < 8; ++i)
-    o << "### " << files[i].first << "\n" << files[i].second.substr(0, 1200) << "\n";
-  return o.str();
+static std::string trim_copy(std::string s) {
+  while (!s.empty() && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r'))
+    s.erase(s.begin());
+  while (!s.empty() && (s[s.size() - 1] == ' ' || s[s.size() - 1] == '\t' || s[s.size() - 1] == '\r'))
+    s.resize(s.size() - 1);
+  return s;
 }
 
-static std::string system_prompt(const Cfg& cfg) {
-  std::ostringstream o;
-  o << "You are a small CPE agent. Answer briefly.\n"
-    << "Context window is about 2048 tokens. Do not claim Hermes compatibility.\n"
-    << "Tools (emit ONE JSON object, nothing else, if you need a tool):\n"
-    << "- rag_search: {\"tool\":\"rag_search\",\"query\":\"keywords\"}\n"
-    << "- read_file: {\"tool\":\"read_file\",\"path\":\"relative.md\"}\n"
-    << "- write_file: {\"tool\":\"write_file\",\"path\":\"note.txt\",\"content\":\"...\"}\n"
-    << "- mqtt_publish: {\"tool\":\"mqtt_publish\",\"topic\":\"a/b\",\"payload\":\"hi\"} (needs mqtt http)\n"
-    << "After a tool result, answer in plain text. Never execute shell.\n"
-    << skills_blob(cfg);
-  return o.str();
+static bool is_role_line(const std::string& line) {
+  std::string t = trim_copy(line);
+  for (size_t i = 0; i < t.size(); ++i) {
+    if (t[i] >= 'A' && t[i] <= 'Z')
+      t[i] = (char)(t[i] - 'A' + 'a');
+  }
+  return t == "user" || t == "assistant" || t == "system" || t == "model" || t == "who is the user?" ||
+         t == "who is the assistant?";
 }
 
-static std::string run_tool(const Cfg& cfg, const std::string& name, const std::string& obj) {
+static std::string sanitize_reply(std::string s) {
+  std::string out;
+  std::string prev;
+  int same = 0;
+  std::string line;
+  int kept = 0;
+  for (size_t i = 0; i <= s.size(); ++i) {
+    if (i == s.size() || s[i] == '\n') {
+      std::string t = trim_copy(line);
+      if (is_role_line(t)) {
+        if (kept > 0)
+          break;
+        line.clear();
+        continue;
+      }
+      if (t == prev && !t.empty()) {
+        ++same;
+        if (same >= 1)
+          break;
+      } else {
+        same = 0;
+        prev = t;
+      }
+      if (!out.empty())
+        out.push_back('\n');
+      out += t;
+      ++kept;
+      if (kept >= 2)
+        break;
+      line.clear();
+    } else {
+      line.push_back(s[i]);
+    }
+  }
+  while (!out.empty() && (out[out.size() - 1] == '\n' || out[out.size() - 1] == ' '))
+    out.resize(out.size() - 1);
+  return out;
+}
+
+static void audit_tool(const std::string& tool, const std::string& detail, bool allowed,
+                        const std::string& why) {
+  std::cerr << "[slim] tool " << tool << " (" << detail << ") -> "
+            << (allowed ? "allow" : "deny") << ": " << why << "\\n";
+}
+
+// human_initiated defaults to false on purpose: a call site that forgets to say
+// who asked gets the fail-closed answer.
+static std::string run_tool(const Cfg& cfg, const std::string& name, const std::string& obj,
+                            bool human_initiated = false) {
   if (name == "rag_search") {
     std::string q;
     json_get_string_field(obj, "query", q);
@@ -185,11 +222,20 @@ static std::string run_tool(const Cfg& cfg, const std::string& name, const std::
     return body;
   }
   if (name == "write_file") {
-    std::string rel, content, full, err;
+    std::string rel, content, full, err, why;
     json_get_string_field(obj, "path", rel);
     json_get_string_field(obj, "content", content);
     if (!jail_path(cfg.data_dir, rel, full, err))
       return "tool error: " + err;
+    if (protected_path(rel, why)) {
+      audit_tool(name, rel, false, why);
+      return "tool error: " + why;
+    }
+    if (!approve_mutation(cfg.policy, name, rel, human_initiated, why)) {
+      audit_tool(name, rel, false, why);
+      return "tool error: " + why;
+    }
+    audit_tool(name, rel, true, why);
     if (!write_file_limited(full, content, kMaxWrite, err))
       return "tool error: " + err;
     return "wrote " + rel;
@@ -197,11 +243,18 @@ static std::string run_tool(const Cfg& cfg, const std::string& name, const std::
   if (name == "mqtt_publish") {
     if (cfg.mqtt_http.empty())
       return "tool error: mqtt disabled; set SLIM_MQTT_HTTP";
-    std::string topic, payload;
+    std::string topic, payload, why;
     json_get_string_field(obj, "topic", topic);
     json_get_string_field(obj, "payload", payload);
+    if (!approve_mutation(cfg.policy, name, topic, human_initiated, why)) {
+      audit_tool(name, topic, false, why);
+      return "tool error: " + why;
+    }
+    audit_tool(name, topic, true, why);
     std::ostringstream js;
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
+    // Deliberately single-shot: a publish is a mutation, and a retry after an
+    // ambiguous failure can duplicate the effect.
     HttpResult r = http_post_json(cfg.mqtt_http, js.str(), "", 10);
     if (!r.error.empty() && r.status == 0)
       return "tool error: " + r.error;
@@ -210,44 +263,83 @@ static std::string run_tool(const Cfg& cfg, const std::string& name, const std::
   return "tool error: unknown tool";
 }
 
+static std::string first_word(const std::string& s, std::string& rest) {
+  size_t i = 0;
+  while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+    ++i;
+  size_t j = i;
+  while (j < s.size() && s[j] != ' ' && s[j] != '\t')
+    ++j;
+  rest = trim_copy(s.substr(j));
+  return s.substr(i, j - i);
+}
+
+static std::string run_slash(const Cfg& cfg, const std::string& line) {
+  std::string rest;
+  std::string cmd = first_word(line, rest);
+  if (cmd == "/help" || cmd == "/h")
+    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\nplain text goes to the LLM";
+  if (cmd == "/rag") {
+    std::ostringstream js;
+    js << "{\"query\":\"" << json_escape(rest) << "\"}";
+    return run_tool(cfg, "rag_search", js.str(), true);
+  }
+  if (cmd == "/read") {
+    std::ostringstream js;
+    js << "{\"path\":\"" << json_escape(rest) << "\"}";
+    return run_tool(cfg, "read_file", js.str(), true);
+  }
+  if (cmd == "/write") {
+    std::string path, content;
+    path = first_word(rest, content);
+    std::ostringstream js;
+    js << "{\"path\":\"" << json_escape(path) << "\",\"content\":\"" << json_escape(content) << "\"}";
+    return run_tool(cfg, "write_file", js.str(), true);
+  }
+  if (cmd == "/mqtt") {
+    std::string topic, payload;
+    topic = first_word(rest, payload);
+    std::ostringstream js;
+    js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
+    return run_tool(cfg, "mqtt_publish", js.str(), true);
+  }
+  return "unknown command; /help";
+}
+
 static std::string run_turn(const Cfg& cfg, const std::string& user) {
+  std::string u = trim_copy(user);
+  if (!u.empty() && u[0] == '/')
+    return run_slash(cfg, u);
+  if (cfg.base_url.empty() || cfg.model.empty())
+    throw std::runtime_error("set --base-url and --model, or use /rag /read /write");
   std::vector<std::pair<std::string, std::string> > msgs;
-  msgs.push_back(std::make_pair(std::string("system"), system_prompt(cfg)));
-  std::vector<Hit> hits = rag_search(cfg, user, 3);
-  if (!hits.empty()) {
-    std::ostringstream o;
-    o << "RAG hits: ";
-    for (size_t i = 0; i < hits.size(); ++i)
-      o << hits[i].path << " ";
-    msgs.push_back(std::make_pair(std::string("system"), o.str()));
-  }
-  msgs.push_back(std::make_pair(std::string("user"), user));
-  trim(msgs);
-  std::string reply = chat_fallback(cfg, msgs);
-  std::string obj;
-  if (json_extract_object(reply, obj)) {
-    std::string tool;
-    if (json_get_string_field(obj, "tool", tool) && !tool.empty()) {
-      std::string result = run_tool(cfg, tool, obj);
-      msgs.push_back(std::make_pair(std::string("assistant"), reply));
-      msgs.push_back(std::make_pair(std::string("user"), "tool " + tool + " result:\n" + result));
-      trim(msgs);
-      reply = chat_fallback(cfg, msgs);
-    }
-  }
-  return reply;
+  msgs.push_back(std::make_pair(std::string("user"),
+                                std::string("Q: ") + cap_prompt(u, kMaxPrompt) + "\nA:"));
+  return sanitize_reply(chat_fallback(cfg, msgs));
 }
 
 static void usage() {
-  std::cerr << "slim-agent (C++ t830-slim). Not hardware-verified on T830.\n"
+  std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
+            << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
+            << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
+            << "         retries transport errors, 429 and 5xx; mutations are never retried\n"
+            << "  policy: model-initiated writes/publishes are denied unless enabled\n"
+            << "          --allow-write / --allow-mqtt (or SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1)\n"
+            << "          state files (*.sqlite, *.db, dotfiles) are never writable\n"
+            << "          --non-interactive turns off the approval prompt (deny by default)\n"
             << "env: SLIM_BASE_URL SLIM_FALLBACK_URL SLIM_MODEL SLIM_FALLBACK_MODEL\n"
             << "     SLIM_API_KEY SLIM_DATA_DIR SLIM_SKILLS_DIR SLIM_DOCS_DIR SLIM_MQTT_HTTP\n";
 }
 
 int main(int argc, char** argv) {
   Cfg cfg;
-  cfg.max_tokens = 256;
+  cfg.max_tokens = 64;
+  {
+    std::string mt = env_or("SLIM_MAX_TOKENS", "");
+    if (!mt.empty())
+      cfg.max_tokens = atoi(mt.c_str());
+  }
   cfg.timeout = 120;
   cfg.base_url = env_or("SLIM_BASE_URL", "");
   cfg.fallback_url = env_or("SLIM_FALLBACK_URL", "");
@@ -258,6 +350,18 @@ int main(int argc, char** argv) {
   cfg.skills_dir = env_or("SLIM_SKILLS_DIR", "./slim/skills");
   cfg.docs_dir = env_or("SLIM_DOCS_DIR", "./slim/docs");
   cfg.mqtt_http = env_or("SLIM_MQTT_HTTP", "");
+  cfg.policy.allow_write = env_or("SLIM_ALLOW_WRITE", "") == "1";
+  cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
+  cfg.policy.interactive = isatty(0) != 0;
+  cfg.verbose_http = env_or("SLIM_HTTP_VERBOSE", "") == "1";
+  {
+    std::string a = env_or("SLIM_ATTEMPTS", "");
+    if (!a.empty())
+      cfg.retry.attempts = atoi(a.c_str());
+    std::string b = env_or("SLIM_RETRY_BASE_MS", "");
+    if (!b.empty())
+      cfg.retry.base_delay_ms = atoi(b.c_str());
+  }
   std::string once;
   bool ingest_only = false;
   for (int i = 1; i < argc; ++i) {
@@ -285,6 +389,28 @@ int main(int argc, char** argv) {
       need(cfg.docs_dir);
     else if (a == "--mqtt-http")
       need(cfg.mqtt_http);
+    else if (a == "--max-tokens") {
+      std::string v;
+      need(v);
+      cfg.max_tokens = atoi(v.c_str());
+    } else if (a == "--attempts") {
+      std::string v;
+      need(v);
+      cfg.retry.attempts = atoi(v.c_str());
+    } else if (a == "--retry-base-ms") {
+      std::string v;
+      need(v);
+      cfg.retry.base_delay_ms = atoi(v.c_str());
+    } else if (a == "--http-verbose")
+      cfg.verbose_http = true;
+    else if (a == "--allow-write")
+      cfg.policy.allow_write = true;
+    else if (a == "--allow-mqtt")
+      cfg.policy.allow_mqtt = true;
+    else if (a == "--non-interactive")
+      cfg.policy.interactive = false;
+    else if (a == "--interactive")
+      cfg.policy.interactive = true;
     else if (a == "--once")
       need(once);
     else if (a == "--ingest-only")
@@ -304,16 +430,17 @@ int main(int argc, char** argv) {
     std::cout << "indexed " << files.size() << " files\n";
     return 0;
   }
-  if (cfg.base_url.empty() || cfg.model.empty()) {
+  bool once_slash = !once.empty() && once[0] == '/';
+  if (!once_slash && !ingest_only && (cfg.base_url.empty() || cfg.model.empty())) {
     usage();
-    die("set --base-url and --model");
+    die("set --base-url and --model (not needed for /rag /read /write --once)");
   }
   try {
     if (!once.empty()) {
       std::cout << run_turn(cfg, once) << "\n";
       return 0;
     }
-    std::cerr << "slim-agent C++. empty line or Ctrl-D to quit.\n";
+    std::cerr << "slash: /rag /read /write /help. empty line or Ctrl-D to quit.\n";
     std::string line;
     while (std::getline(std::cin, line)) {
       if (line.empty())
