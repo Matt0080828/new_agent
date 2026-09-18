@@ -261,9 +261,54 @@ docker exec adb-t830-run adb devices -l      # 0123456789ABCDEF  device  usb:1-7
 
 `adb push` executes inside that container, so it cannot read host paths: `docker cp` the
 payload in first, push from inside, and **compare sha256 on both sides before running
-anything**. `run-on-t830.sh` in the deploy bundle does exactly that and then runs
-`on-device-smoke.sh`, which needs no network and keeps each run in its own
-`/tmp/slim-smoke/data-$$` directory.
+anything**. Both scripts are in this repository (`slim/deploy/`), so a clone is enough:
+
+```bash
+make -C slim/cpp t830-static          # the artifact the script pushes
+./slim/deploy/run-on-t830.sh          # container + adb + push + sha256 + on-device smoke test
+./slim/deploy/run-on-t830.sh --no-smoke   # just get the binary onto the device
+```
+
+### Run it on the device
+
+By hand, if you would rather see every step (the container from above is running):
+
+```bash
+docker exec adb-t830-run adb push slim/cpp/slim-agent-t830-static /tmp/slim/slim-agent-t830-static
+docker exec adb-t830-run adb shell chmod +x /tmp/slim/slim-agent-t830-static
+docker exec adb-t830-run adb shell sha256sum /tmp/slim/slim-agent-t830-static   # compare with the host
+```
+
+Then, with no model server at all - this is what `on-device-smoke.sh` automates, and it needs
+no network, writes only under its own `/tmp/slim-smoke/data-$$`, and deletes nothing:
+
+```bash
+docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/data \
+  --session smoke --once "/help"'
+docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/data \
+  --session smoke --once "/write note.txt hello-from-t830"'
+docker exec adb-t830-run adb shell 'cd /tmp/slim && cat /tmp/slim/data/note.txt'   # read it back
+docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/data \
+  --dry-run-writes --session smoke --once "/write nope.txt should-not-exist"'
+```
+
+A live turn, with a model server on the LAN (`<host>` = the machine running LM Studio, on the
+CPE's own `br-lan` segment - the verified run used `192.168.1.210:1234`):
+
+```bash
+docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/live \
+  --session live --non-interactive --timeout 420 \
+  --base-url http://<host>:1234/v1 --model qwen2.5-7b-instruct-1m --stream --once "Remember the number 7391"'
+docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/live \
+  --session live --history 6 --non-interactive --timeout 420 \
+  --base-url http://<host>:1234/v1 --model qwen2.5-7b-instruct-1m --once "What number did I ask you to remember?"'
+```
+
+That second command is the point of `--history`: it answers `7391` because the first turn was
+replayed; add `--history 0` and it answers something else. Keep the whole run under `/tmp`
+(the image is read-only apart from `/overlay` and `/data`), and `--timeout 420` because a turn
+through a shared LM Studio takes 45-63 s. Clean up with `rm -rf /tmp/slim` when you are done -
+nothing outside that directory is touched.
 
 Verified on the device (static build, sha256-matched):
 
