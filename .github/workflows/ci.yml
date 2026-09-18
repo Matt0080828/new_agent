@@ -2,7 +2,7 @@ name: t830 slim agent
 
 on:
   push:
-    branches: [t830-only]
+    branches: [t830-only, main]
   pull_request:
 
 permissions:
