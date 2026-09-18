@@ -306,11 +306,11 @@ where `run-on-t830.sh` leaves the binary (`/tmp/slim-smoke/`); a hand push puts 
 `/tmp/slim/`.
 
 ```bash
-docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/live \
-  --session live --non-interactive --timeout 420 \
+docker exec adb-t830-run adb shell 'cd /tmp/slim-smoke && ./slim-agent-t830-static --data-dir /tmp/slim-live \
+  --session live --non-interactive \
   --base-url http://<host>:1234/v1 --model qwen2.5-7b-instruct-1m --stream --once "Remember the number 7391"'
-docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/live \
-  --session live --history 6 --non-interactive --timeout 420 \
+docker exec adb-t830-run adb shell 'cd /tmp/slim-smoke && ./slim-agent-t830-static --data-dir /tmp/slim-live \
+  --session live --history 6 --non-interactive \
   --base-url http://<host>:1234/v1 --model qwen2.5-7b-instruct-1m --once "What number did I ask you to remember?"'
 ```
 
@@ -364,9 +364,12 @@ The earlier "no route to the model server" note is resolved by putting the host 
 LAN. The `rndis0` gadget remains an option, but OpenWrt's netifd removes manually added
 addresses, so it has to be configured through `uci` or inside the same shell invocation.
 
-Turn latency with a shared LM Studio is 45-63 s, and a device-side timeout shorter than the
-server needs cuts the turn mid-prefill (LM Studio logs `Client disconnected. Stopping
-generation...`); give it 300-420 s.
+Turn latency with a shared LM Studio is 45-63 s. The C++ client has no timeout flag - its
+socket timeout is compiled in (`cfg.timeout = 120` in `agent.cpp`), which is enough for those
+turns but not unlimited, so a slow server fails the turn instead of hanging. If you need a
+longer one, change that constant and rebuild; the Python client has the knob as
+`--timeout` / `SLIM_TIMEOUT`. Exceeding it cuts the turn mid-prefill, and LM Studio logs
+`Client disconnected. Stopping generation...`.
 
 ## Out of scope
 
