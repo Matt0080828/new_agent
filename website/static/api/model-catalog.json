@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-07-09T18:38:59Z",
+  "updated_at": "2026-09-18T05:25:04Z",
   "metadata": {
     "source": "hermes-agent repo",
     "docs": "https://hermes-agent.nousresearch.com/docs/reference/model-catalog"
@@ -18,6 +18,10 @@
         },
         {
           "id": "anthropic/claude-opus-4.8",
+          "description": ""
+        },
+        {
+          "id": "anthropic/claude-opus-5",
           "description": ""
         },
         {
@@ -166,10 +170,6 @@
         },
         {
           "id": "nvidia/nemotron-3-ultra-550b-a55b:free",
-          "description": "free"
-        },
-        {
-          "id": "inclusionai/ring-2.6-1t:free",
           "description": "free"
         }
       ]
