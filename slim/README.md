@@ -315,10 +315,26 @@ docker exec adb-t830-run adb shell 'cd /tmp/slim-smoke && ./slim-agent-t830-stat
 ```
 
 That second command is the point of `--history`: it answers `7391` because the first turn was
-replayed; add `--history 0` and it answers something else. Keep the whole run under `/tmp`
-(the image is read-only apart from `/overlay` and `/data`), and `--timeout 420` because a turn
-through a shared LM Studio takes 45-63 s. Clean up with `rm -rf /tmp/slim /tmp/slim-smoke` (whichever you created) when you are done -
-nothing outside those directories is touched.
+replayed; add `--history 0` and it cannot. Keep the whole run under `/tmp` (the image is
+read-only apart from `/overlay` and `/data`). A turn through a shared LM Studio takes 45-63 s
+cold, including the model load, and about a second once the model is resident - the C++ client
+has no timeout flag, its socket timeout is compiled in, see below. Clean up with
+`rm -rf /tmp/slim /tmp/slim-smoke` (whichever you created) when you are done - nothing outside
+those directories is touched.
+
+Run on the device, this is the transcript, not a summary:
+
+```
+$ ./slim-agent-t830-static --data-dir /tmp/slim-live --session live --stream --once "Remember the number 7391..."
+The number is 7391.
+$ ... --history 6 --once "What number did I ask you to remember?"
+You asked me to remember the number 7391.
+$ ... --history 0 --once "What number did I ask you to remember?"
+I don't remember specific numbers or details from previous conversations once the session ends.
+```
+
+Those three turns left `live.jsonl` (mode `0600`) holding six lines - `user`, `assistant`,
+three times over - in the JSONL format above.
 
 Verified on the device (static build, sha256-matched):
 
@@ -357,7 +373,7 @@ answer through it:
 | streamed turn (`--stream`, static build) | `qwen2.5-7b-instruct-1m` answered; first turn 54-63 s including the model load |
 | session record | `sessions/live.jsonl`, mode 600, one JSON object per line |
 | history replay (`--history 6`, dynamic build) | a later turn answered `7391` - the number the first turn was asked to remember |
-| `--history 0` | the same question answered `42` instead, so replay really is off |
+| `--history 0` | the same question gets no answer from history (`42` in one run, "I don't remember..." in another), so replay really is off |
 | failing model (the server answers 400) | reports `HTTP status 400: <server message>` and writes no session file |
 
 The earlier "no route to the model server" note is resolved by putting the host on the CPE's
