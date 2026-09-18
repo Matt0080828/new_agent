@@ -15,7 +15,7 @@ extracted from there (`cc8a67c`) into a repository of its own with no shared his
 slim/            Python client: policy, session store, tools, RAG, tests
 slim/cpp/        C++ client with the same features, plus four test binaries
 slim/deploy/     run-on-t830.sh and on-device-smoke.sh - the deployment path
-slim/README.md   the manual: build, deploy, install, configure, and what was verified
+slim/README.md   the manual: build, deploy, install, configure, model on the device
 ```
 
 ## Build and test on the host
@@ -39,11 +39,45 @@ make -C slim/cpp t830-static    # 698,664 bytes, NEEDED 0, stripped; nothing to 
 ```
 
 The device is reachable over **adb on USB** - its management IP answers ARP but every TCP port
-is closed, `/dev/ttyACM*` are modem AT ports, and the RNDIS gadget hands out no DHCP. The
-manual in `slim/README.md` covers the rest: "Deploy to the CPE", "Run it on the device", and
-"Install it so it survives a reboot, and configure it" - the last one says where to put the
-binary (`/data/slim/...`), every setting with its flag, environment variable and default, and
-why `--data-dir` has to be passed explicitly.
+is closed, `/dev/ttyACM*` are modem AT ports, and the RNDIS gadget hands out no DHCP. `adb`
+runs inside a privileged container because the USB node is root-only, and a container cannot
+read host paths, so those scripts stage every payload with `docker cp` before pushing.
+
+## Install it, and how it is configured
+
+`/tmp` is tmpfs, so the pushed copy is gone after a reboot. Install onto `/data` (12.5 GB free)
+or `/overlay` (116 MB); neither is mounted `noexec`. The layout the scripts and the manual
+assume is `/data/slim/{slim-agent,run,data,skills,docs}` - 700 KB plus whatever corpus you add.
+The C++ client has **no config file**: flags and environment only, and **a flag beats the
+environment**. Its defaults are relative to the working directory (`--data-dir` defaults to
+`./slim/data`), which on the read-only root means turns are answered but never recorded - so
+always pass `--data-dir` explicitly. The full flag/environment/default table, the install
+commands and a wrapper script that holds the configuration are in `slim/README.md`.
+
+## Using a model that runs on the T830 itself
+
+The agent only knows an OpenAI-compatible endpoint, so a `llama.cpp` server on the device is a
+`--base-url` change and nothing else - no LAN, no other setting:
+
+```bash
+# device: start the server on loopback (no service entry; on demand, stop with kill)
+cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.gguf \
+  --host 127.0.0.1 --port 8080 -c 2048 -t 4 > llama-server.log 2>&1 &
+
+# agent against it
+./slim-agent --data-dir /data/slim/data --session local --non-interactive \
+  --model qwen2.5-0.5b-instruct --base-url http://127.0.0.1:8080/v1 --stream --once "Reply with one word: pong"
+```
+
+What fits: the CPE has 1.7 GB RAM, and `Qwen2.5-0.5B-Instruct-Q4_K_M` (469 MB, pushed in 47 s)
+loaded with 646 MB RSS and ~1.1 GB still free - much past 1B will not fit. The cross-built
+server needs only `libstdc++.so.6`, `libgcc_s.so.1` and musl `libc`, all present in the image.
+With `-t 4` a short turn takes ~4 s and the server reports 12 tok/s prompt eval and 7.9 tok/s
+generation. A model this size is not the 7B you can serve from the LAN: expect weaker answers,
+and drive it with the slash commands (`/rag`, `/read`, `/write`, `/mqtt`, `/history`) - it does
+not emit reliable tool JSON. Both can coexist per invocation, and `--fallback-url` gives
+local-first with a LAN escape hatch. `slim/README.md` has the staging commands, the measured
+numbers, and the caveats.
 
 ## Verified on real hardware
 
@@ -51,8 +85,9 @@ why `--data-dir` has to be passed explicitly.
 | --- | --- |
 | artifact integrity | `sha256 5de6ea50...` matches on host and device (`NEEDED 0`, stripped) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: slash commands with read-back, the session store, `--dry-run-writes` writing nothing, every fail-closed refusal |
-| live model turn (LAN server) | a streamed answer, then `--history 6` recalling the number from the earlier turn, then `--history 0` failing to - the negative control |
-| session store | `sessions/live.jsonl`, mode `0600`, one JSON object per line |
+| live model turn over the LAN | a streamed answer, then `--history 6` recalling the number from the earlier turn, then `--history 0` failing to - the negative control |
+| **model on the device itself** | `llama-server` on loopback + a 0.5B Q4: `PONG!` in 4 s, 12 tok/s prompt / 7.9 tok/s generation, `/history` replaying those turns, and `--fallback-url` answering through a dead primary |
+| session store | `sessions/<name>.jsonl`, mode `0600`, one JSON object per line |
 | failing model (HTTP 400) | reports `HTTP status 400: <server message>` and writes no session file |
 
 A rebuild of this tree reproduces that exact artifact, so compare the sha256 before deploying.
