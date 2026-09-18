@@ -40,7 +40,9 @@ static std::string env_or(const char* k, const std::string& d) {
 static std::string openai_chat(const Cfg& cfg, const std::string& url, const std::string& model,
                                const std::vector<std::pair<std::string, std::string> >& msgs) {
   std::ostringstream js;
-  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":false,\"max_tokens\":" << cfg.max_tokens
+  js << "{\"model\":\"" << json_escape(model) << "\",\"stream\":false,\"temperature\":0"
+     << ",\"max_tokens\":" << cfg.max_tokens
+     << ",\"stop\":[\"\\nuser\",\"\\nassistant\",\"\\nmodel\",\"<start_of_turn>\",\"\\n- No\"]"
      << ",\"messages\":[";
   for (size_t i = 0; i < msgs.size(); ++i) {
     if (i)
@@ -132,30 +134,61 @@ static std::vector<Hit> rag_search(const Cfg& cfg, const std::string& q, int lim
   return hits;
 }
 
-static std::string skills_blob(const Cfg& cfg) {
-  std::vector<std::pair<std::string, std::string> > files;
-  list_text_files(cfg.skills_dir, "", files);
-  if (files.empty())
-    return "";
-  std::ostringstream o;
-  o << "Available skills (markdown only, do not execute):\n";
-  for (size_t i = 0; i < files.size() && i < 8; ++i)
-    o << "### " << files[i].first << "\n" << files[i].second.substr(0, 1200) << "\n";
-  return o.str();
+static std::string trim_copy(std::string s) {
+  while (!s.empty() && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r'))
+    s.erase(s.begin());
+  while (!s.empty() && (s[s.size() - 1] == ' ' || s[s.size() - 1] == '\t' || s[s.size() - 1] == '\r'))
+    s.resize(s.size() - 1);
+  return s;
 }
 
-static std::string system_prompt(const Cfg& cfg) {
-  std::ostringstream o;
-  o << "You are a small CPE agent. Answer briefly.\n"
-    << "Context window is about 2048 tokens. Do not claim Hermes compatibility.\n"
-    << "Tools (emit ONE JSON object, nothing else, if you need a tool):\n"
-    << "- rag_search: {\"tool\":\"rag_search\",\"query\":\"keywords\"}\n"
-    << "- read_file: {\"tool\":\"read_file\",\"path\":\"relative.md\"}\n"
-    << "- write_file: {\"tool\":\"write_file\",\"path\":\"note.txt\",\"content\":\"...\"}\n"
-    << "- mqtt_publish: {\"tool\":\"mqtt_publish\",\"topic\":\"a/b\",\"payload\":\"hi\"} (needs mqtt http)\n"
-    << "After a tool result, answer in plain text. Never execute shell.\n"
-    << skills_blob(cfg);
-  return o.str();
+static bool is_role_line(const std::string& line) {
+  std::string t = trim_copy(line);
+  for (size_t i = 0; i < t.size(); ++i) {
+    if (t[i] >= 'A' && t[i] <= 'Z')
+      t[i] = (char)(t[i] - 'A' + 'a');
+  }
+  return t == "user" || t == "assistant" || t == "system" || t == "model" || t == "who is the user?" ||
+         t == "who is the assistant?";
+}
+
+static std::string sanitize_reply(std::string s) {
+  std::string out;
+  std::string prev;
+  int same = 0;
+  std::string line;
+  int kept = 0;
+  for (size_t i = 0; i <= s.size(); ++i) {
+    if (i == s.size() || s[i] == '\n') {
+      std::string t = trim_copy(line);
+      if (is_role_line(t)) {
+        if (kept > 0)
+          break;
+        line.clear();
+        continue;
+      }
+      if (t == prev && !t.empty()) {
+        ++same;
+        if (same >= 1)
+          break;
+      } else {
+        same = 0;
+        prev = t;
+      }
+      if (!out.empty())
+        out.push_back('\n');
+      out += t;
+      ++kept;
+      if (kept >= 2)
+        break;
+      line.clear();
+    } else {
+      line.push_back(s[i]);
+    }
+  }
+  while (!out.empty() && (out[out.size() - 1] == '\n' || out[out.size() - 1] == ' '))
+    out.resize(out.size() - 1);
+  return out;
 }
 
 static std::string run_tool(const Cfg& cfg, const std::string& name, const std::string& obj) {
@@ -210,44 +243,76 @@ static std::string run_tool(const Cfg& cfg, const std::string& name, const std::
   return "tool error: unknown tool";
 }
 
+static std::string first_word(const std::string& s, std::string& rest) {
+  size_t i = 0;
+  while (i < s.size() && (s[i] == ' ' || s[i] == '\t'))
+    ++i;
+  size_t j = i;
+  while (j < s.size() && s[j] != ' ' && s[j] != '\t')
+    ++j;
+  rest = trim_copy(s.substr(j));
+  return s.substr(i, j - i);
+}
+
+static std::string run_slash(const Cfg& cfg, const std::string& line) {
+  std::string rest;
+  std::string cmd = first_word(line, rest);
+  if (cmd == "/help" || cmd == "/h")
+    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\nplain text goes to the LLM";
+  if (cmd == "/rag") {
+    std::ostringstream js;
+    js << "{\"query\":\"" << json_escape(rest) << "\"}";
+    return run_tool(cfg, "rag_search", js.str());
+  }
+  if (cmd == "/read") {
+    std::ostringstream js;
+    js << "{\"path\":\"" << json_escape(rest) << "\"}";
+    return run_tool(cfg, "read_file", js.str());
+  }
+  if (cmd == "/write") {
+    std::string path, content;
+    path = first_word(rest, content);
+    std::ostringstream js;
+    js << "{\"path\":\"" << json_escape(path) << "\",\"content\":\"" << json_escape(content) << "\"}";
+    return run_tool(cfg, "write_file", js.str());
+  }
+  if (cmd == "/mqtt") {
+    std::string topic, payload;
+    topic = first_word(rest, payload);
+    std::ostringstream js;
+    js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
+    return run_tool(cfg, "mqtt_publish", js.str());
+  }
+  return "unknown command; /help";
+}
+
 static std::string run_turn(const Cfg& cfg, const std::string& user) {
+  std::string u = trim_copy(user);
+  if (!u.empty() && u[0] == '/')
+    return run_slash(cfg, u);
+  if (cfg.base_url.empty() || cfg.model.empty())
+    throw std::runtime_error("set --base-url and --model, or use /rag /read /write");
   std::vector<std::pair<std::string, std::string> > msgs;
-  msgs.push_back(std::make_pair(std::string("system"), system_prompt(cfg)));
-  std::vector<Hit> hits = rag_search(cfg, user, 3);
-  if (!hits.empty()) {
-    std::ostringstream o;
-    o << "RAG hits: ";
-    for (size_t i = 0; i < hits.size(); ++i)
-      o << hits[i].path << " ";
-    msgs.push_back(std::make_pair(std::string("system"), o.str()));
-  }
-  msgs.push_back(std::make_pair(std::string("user"), user));
-  trim(msgs);
-  std::string reply = chat_fallback(cfg, msgs);
-  std::string obj;
-  if (json_extract_object(reply, obj)) {
-    std::string tool;
-    if (json_get_string_field(obj, "tool", tool) && !tool.empty()) {
-      std::string result = run_tool(cfg, tool, obj);
-      msgs.push_back(std::make_pair(std::string("assistant"), reply));
-      msgs.push_back(std::make_pair(std::string("user"), "tool " + tool + " result:\n" + result));
-      trim(msgs);
-      reply = chat_fallback(cfg, msgs);
-    }
-  }
-  return reply;
+  msgs.push_back(std::make_pair(std::string("user"), std::string("Q: ") + u + "\nA:"));
+  return sanitize_reply(chat_fallback(cfg, msgs));
 }
 
 static void usage() {
-  std::cerr << "slim-agent (C++ t830-slim). Not hardware-verified on T830.\n"
+  std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
+            << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
             << "env: SLIM_BASE_URL SLIM_FALLBACK_URL SLIM_MODEL SLIM_FALLBACK_MODEL\n"
             << "     SLIM_API_KEY SLIM_DATA_DIR SLIM_SKILLS_DIR SLIM_DOCS_DIR SLIM_MQTT_HTTP\n";
 }
 
 int main(int argc, char** argv) {
   Cfg cfg;
-  cfg.max_tokens = 256;
+  cfg.max_tokens = 64;
+  {
+    std::string mt = env_or("SLIM_MAX_TOKENS", "");
+    if (!mt.empty())
+      cfg.max_tokens = atoi(mt.c_str());
+  }
   cfg.timeout = 120;
   cfg.base_url = env_or("SLIM_BASE_URL", "");
   cfg.fallback_url = env_or("SLIM_FALLBACK_URL", "");
@@ -285,7 +350,11 @@ int main(int argc, char** argv) {
       need(cfg.docs_dir);
     else if (a == "--mqtt-http")
       need(cfg.mqtt_http);
-    else if (a == "--once")
+    else if (a == "--max-tokens") {
+      std::string v;
+      need(v);
+      cfg.max_tokens = atoi(v.c_str());
+    } else if (a == "--once")
       need(once);
     else if (a == "--ingest-only")
       ingest_only = true;
@@ -304,16 +373,17 @@ int main(int argc, char** argv) {
     std::cout << "indexed " << files.size() << " files\n";
     return 0;
   }
-  if (cfg.base_url.empty() || cfg.model.empty()) {
+  bool once_slash = !once.empty() && once[0] == '/';
+  if (!once_slash && !ingest_only && (cfg.base_url.empty() || cfg.model.empty())) {
     usage();
-    die("set --base-url and --model");
+    die("set --base-url and --model (not needed for /rag /read /write --once)");
   }
   try {
     if (!once.empty()) {
       std::cout << run_turn(cfg, once) << "\n";
       return 0;
     }
-    std::cerr << "slim-agent C++. empty line or Ctrl-D to quit.\n";
+    std::cerr << "slash: /rag /read /write /help. empty line or Ctrl-D to quit.\n";
     std::string line;
     while (std::getline(std::cin, line)) {
       if (line.empty())
