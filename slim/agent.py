@@ -17,6 +17,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from error import SlimError
+from policy import approve_tool
 from rag import connect, ingest_tree, log_turn, search
 from skills import format_skills, load_skills
 from tools import TOOLS, parse_tool_call, run_tool
@@ -141,10 +142,17 @@ def run_turn(user_text, cfg, conn):
     parsed = parse_tool_call(reply)
     if parsed:
         name, args = parsed
-        try:
-            result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "")
-        except (ValueError, OSError) as exc:
-            result = "tool error: %s" % exc
+        detail = args.get("path") or args.get("topic") or ""
+        ok, reason = approve_tool(cfg.get("policy") or {}, name, detail, human=False)
+        sys.stderr.write("[slim] tool %s (%s) -> %s: %s\n"
+                         % (name, detail, "allow" if ok else "deny", reason))
+        if ok:
+            try:
+                result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "")
+            except (ValueError, OSError) as exc:
+                result = "tool error: %s" % exc
+        else:
+            result = "tool error: %s" % reason
         messages.append({"role": "assistant", "content": reply})
         messages.append({"role": "user", "content": "tool %s result:\n%s" % (name, result)})
         messages = _trim(messages)
@@ -186,6 +194,14 @@ def _parse_args(argv):
     p.add_argument("--docs-dir", default=os.environ.get("SLIM_DOCS_DIR", os.path.join(HERE, "docs")))
     p.add_argument("--db", default=os.environ.get("SLIM_DB", ""))
     p.add_argument("--mqtt-http", default=os.environ.get("SLIM_MQTT_HTTP", ""))
+    p.add_argument("--allow-write", action="store_true",
+                   default=os.environ.get("SLIM_ALLOW_WRITE", "") == "1",
+                   help="allow model-initiated write_file (default: denied)")
+    p.add_argument("--allow-mqtt", action="store_true",
+                   default=os.environ.get("SLIM_ALLOW_MQTT", "") == "1",
+                   help="allow model-initiated mqtt_publish (default: denied)")
+    p.add_argument("--non-interactive", action="store_true",
+                   help="never prompt for approval (deny by default)")
     p.add_argument("--once", default="", help="single prompt then exit")
     p.add_argument("--ingest-only", action="store_true")
     return p.parse_args(argv)
@@ -212,6 +228,13 @@ def build_cfg(args):
         "docs_dir": pick("docs_dir", args.docs_dir),
         "mqtt_http": pick("mqtt_http", args.mqtt_http),
         "db": args.db or os.path.join(data_dir, "slim.sqlite"),
+        "policy": {
+            "allow_write": bool(args.allow_write or file_cfg.get("allow_write")),
+            "allow_mqtt": bool(args.allow_mqtt or file_cfg.get("allow_mqtt")),
+            # Only prompt when a terminal is attached and the operator did not
+            # opt out; otherwise the gate denies instead of blocking forever.
+            "interactive": (not args.non_interactive) and sys.stdin.isatty(),
+        },
     }
     return cfg
 

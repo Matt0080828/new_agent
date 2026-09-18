@@ -1,2 +1,4 @@
+# build outputs (host + T830 cross build + test binary)
 slim-agent
 slim-agent-t830
+tests/test_slim

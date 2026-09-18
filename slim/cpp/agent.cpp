@@ -1,4 +1,5 @@
 #include "http.hpp"
+#include "policy.hpp"
 #include "util.hpp"
 
 #include <cstdlib>
@@ -7,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 static const size_t kMaxWrite = 8 * 1024;
@@ -25,6 +27,7 @@ struct Cfg {
   std::string mqtt_http;
   int max_tokens;
   int timeout;
+  Policy policy;
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -191,7 +194,16 @@ static std::string sanitize_reply(std::string s) {
   return out;
 }
 
-static std::string run_tool(const Cfg& cfg, const std::string& name, const std::string& obj) {
+static void audit_tool(const std::string& tool, const std::string& detail, bool allowed,
+                        const std::string& why) {
+  std::cerr << "[slim] tool " << tool << " (" << detail << ") -> "
+            << (allowed ? "allow" : "deny") << ": " << why << "\\n";
+}
+
+// human_initiated defaults to false on purpose: a call site that forgets to say
+// who asked gets the fail-closed answer.
+static std::string run_tool(const Cfg& cfg, const std::string& name, const std::string& obj,
+                            bool human_initiated = false) {
   if (name == "rag_search") {
     std::string q;
     json_get_string_field(obj, "query", q);
@@ -218,11 +230,20 @@ static std::string run_tool(const Cfg& cfg, const std::string& name, const std::
     return body;
   }
   if (name == "write_file") {
-    std::string rel, content, full, err;
+    std::string rel, content, full, err, why;
     json_get_string_field(obj, "path", rel);
     json_get_string_field(obj, "content", content);
     if (!jail_path(cfg.data_dir, rel, full, err))
       return "tool error: " + err;
+    if (protected_path(rel, why)) {
+      audit_tool(name, rel, false, why);
+      return "tool error: " + why;
+    }
+    if (!approve_mutation(cfg.policy, name, rel, human_initiated, why)) {
+      audit_tool(name, rel, false, why);
+      return "tool error: " + why;
+    }
+    audit_tool(name, rel, true, why);
     if (!write_file_limited(full, content, kMaxWrite, err))
       return "tool error: " + err;
     return "wrote " + rel;
@@ -230,9 +251,14 @@ static std::string run_tool(const Cfg& cfg, const std::string& name, const std::
   if (name == "mqtt_publish") {
     if (cfg.mqtt_http.empty())
       return "tool error: mqtt disabled; set SLIM_MQTT_HTTP";
-    std::string topic, payload;
+    std::string topic, payload, why;
     json_get_string_field(obj, "topic", topic);
     json_get_string_field(obj, "payload", payload);
+    if (!approve_mutation(cfg.policy, name, topic, human_initiated, why)) {
+      audit_tool(name, topic, false, why);
+      return "tool error: " + why;
+    }
+    audit_tool(name, topic, true, why);
     std::ostringstream js;
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
     HttpResult r = http_post_json(cfg.mqtt_http, js.str(), "", 10);
@@ -262,26 +288,26 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
   if (cmd == "/rag") {
     std::ostringstream js;
     js << "{\"query\":\"" << json_escape(rest) << "\"}";
-    return run_tool(cfg, "rag_search", js.str());
+    return run_tool(cfg, "rag_search", js.str(), true);
   }
   if (cmd == "/read") {
     std::ostringstream js;
     js << "{\"path\":\"" << json_escape(rest) << "\"}";
-    return run_tool(cfg, "read_file", js.str());
+    return run_tool(cfg, "read_file", js.str(), true);
   }
   if (cmd == "/write") {
     std::string path, content;
     path = first_word(rest, content);
     std::ostringstream js;
     js << "{\"path\":\"" << json_escape(path) << "\",\"content\":\"" << json_escape(content) << "\"}";
-    return run_tool(cfg, "write_file", js.str());
+    return run_tool(cfg, "write_file", js.str(), true);
   }
   if (cmd == "/mqtt") {
     std::string topic, payload;
     topic = first_word(rest, payload);
     std::ostringstream js;
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
-    return run_tool(cfg, "mqtt_publish", js.str());
+    return run_tool(cfg, "mqtt_publish", js.str(), true);
   }
   return "unknown command; /help";
 }
@@ -301,6 +327,10 @@ static void usage() {
   std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
+            << "  policy: model-initiated writes/publishes are denied unless enabled\n"
+            << "          --allow-write / --allow-mqtt (or SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1)\n"
+            << "          state files (*.sqlite, *.db, dotfiles) are never writable\n"
+            << "          --non-interactive turns off the approval prompt (deny by default)\n"
             << "env: SLIM_BASE_URL SLIM_FALLBACK_URL SLIM_MODEL SLIM_FALLBACK_MODEL\n"
             << "     SLIM_API_KEY SLIM_DATA_DIR SLIM_SKILLS_DIR SLIM_DOCS_DIR SLIM_MQTT_HTTP\n";
 }
@@ -323,6 +353,9 @@ int main(int argc, char** argv) {
   cfg.skills_dir = env_or("SLIM_SKILLS_DIR", "./slim/skills");
   cfg.docs_dir = env_or("SLIM_DOCS_DIR", "./slim/docs");
   cfg.mqtt_http = env_or("SLIM_MQTT_HTTP", "");
+  cfg.policy.allow_write = env_or("SLIM_ALLOW_WRITE", "") == "1";
+  cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
+  cfg.policy.interactive = isatty(0) != 0;
   std::string once;
   bool ingest_only = false;
   for (int i = 1; i < argc; ++i) {
@@ -354,7 +387,15 @@ int main(int argc, char** argv) {
       std::string v;
       need(v);
       cfg.max_tokens = atoi(v.c_str());
-    } else if (a == "--once")
+    } else if (a == "--allow-write")
+      cfg.policy.allow_write = true;
+    else if (a == "--allow-mqtt")
+      cfg.policy.allow_mqtt = true;
+    else if (a == "--non-interactive")
+      cfg.policy.interactive = false;
+    else if (a == "--interactive")
+      cfg.policy.interactive = true;
+    else if (a == "--once")
       need(once);
     else if (a == "--ingest-only")
       ingest_only = true;
