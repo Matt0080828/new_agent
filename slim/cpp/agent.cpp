@@ -264,7 +264,7 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
   std::string rest;
   std::string cmd = first_word(line, rest);
   if (cmd == "/help" || cmd == "/h")
-    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\n/history\nplain text goes to the LLM";
+    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\n/run CMD [ARGS]\n/history\nplain text goes to the LLM";
   if (cmd == "/history" || cmd == "/hist") {
     std::vector<Turn> turns = session_load(cfg.session_file, cfg.history);
     if (turns.empty())
@@ -316,6 +316,16 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
     return run_tool(tool_env_from(cfg), "mqtt_publish", js.str(), true, 0, 0);
   }
+  if (cmd == "/run") {
+    // The operator (or a script) asked for this, so the gate is the allowlist; if
+    // a model ever gets a tool-call path, approve_mutation() gates it as well.
+    std::string name, rest_args;
+    name = first_word(rest, rest_args);
+    std::ostringstream js;
+    js << "{\"command\":\"" << json_escape(name) << "\",\"args\":\""
+       << json_escape(rest_args) << "\"}";
+    return run_tool(tool_env_from(cfg), "run_command", js.str(), true, 0, 0);
+  }
   return "unknown command; /help";
 }
 
@@ -366,6 +376,7 @@ static void usage() {
   std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
+            << "  /run CMD [ARGS] runs an allowlisted command (no shell; see below)\n"
             << "  stream: --stream prints tokens as they arrive (SLIM_STREAM=1)\n"
             << "  session: --session NAME --history N (default 6; 0 replays nothing, -1 all)\n"
             << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
@@ -375,8 +386,12 @@ static void usage() {
             << "          --allow-write / --allow-mqtt (or SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1)\n"
             << "          state files (*.sqlite, *.db, dotfiles) are never writable\n"
             << "          --non-interactive turns off the approval prompt (deny by default)\n"
+            << "  exec: --allow-exec (or SLIM_ALLOW_EXEC=1) lets the model run commands, "
+               "and only the bare names in <data-dir>/commands.allow; that file is not\n"
+            << "        writable through a tool, and no shell is used - args go as-is\n"
             << "env: SLIM_BASE_URL SLIM_FALLBACK_URL SLIM_MODEL SLIM_FALLBACK_MODEL\n"
-            << "     SLIM_API_KEY SLIM_DATA_DIR SLIM_SKILLS_DIR SLIM_DOCS_DIR SLIM_MQTT_HTTP\n";
+            << "     SLIM_API_KEY SLIM_DATA_DIR SLIM_SKILLS_DIR SLIM_DOCS_DIR SLIM_MQTT_HTTP\n"
+            << "     SLIM_ALLOW_WRITE SLIM_ALLOW_MQTT SLIM_ALLOW_EXEC\n";
 }
 
 int main(int argc, char** argv) {
@@ -473,6 +488,8 @@ int main(int argc, char** argv) {
       cfg.policy.allow_write = true;
     else if (a == "--allow-mqtt")
       cfg.policy.allow_mqtt = true;
+      else if (a == "--allow-exec")
+        cfg.policy.allow_exec = true;
     else if (a == "--non-interactive")
       cfg.policy.interactive = false;
     else if (a == "--interactive")
@@ -492,6 +509,15 @@ int main(int argc, char** argv) {
     std::string why;
     if (!valid_session_name(cfg.session, why))
       die("bad --session: " + why, 2);
+    // The allowlist is read once, after every flag is known. It lives in the data
+    // directory, but protected_path() keeps the model from writing it, so it cannot
+    // grant itself a command. No file (or an empty one) permits nothing at all.
+    {
+      std::string dir = cfg.data_dir;
+      if (!dir.empty() && dir[dir.size() - 1] != '/')
+        dir += "/";
+      cfg.policy.exec_allow = load_name_list(dir + "commands.allow");
+    }
     cfg.session_file = session_path(cfg.data_dir, cfg.session);
   }
   if (ingest_only) {

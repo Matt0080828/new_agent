@@ -23,15 +23,15 @@ slim/README.md   詳細マニュアル：ビルド、配備、インストール
 ## ホストでのビルドとテスト
 
 ```bash
-cd slim/cpp && make && make test                              # 74 + 54 + 39 + 43 = 210 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 89 tests、標準ライブラリのみ
+cd slim/cpp && make && make test                              # 81 + 54 + 39 + 53 = 227 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 97 tests、標準ライブラリのみ
 ```
 
 ## CPE 向けビルド
 
 ```bash
-make -C slim/cpp t830           # 動的リンク、121,736 bytes。端末側に libstdc++/libgcc が必要
-make -C slim/cpp t830-static    # 698,664 bytes、NEEDED 0、strip 済み。端末側に何も要りません
+make -C slim/cpp t830           # 動的リンク、138,240 bytes。端末側に libstdc++/libgcc が必要
+make -C slim/cpp t830-static    # 715,048 bytes、NEEDED 0、strip 済み。端末側に何も要りません
 ```
 
 ## CPE へ入れる
@@ -87,7 +87,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 
 | 確認項目 | CPE 上での結果 |
 | --- | --- |
-| artifact の同一性 | `sha256 5de6ea50...` がホストと端末で一致（`NEEDED 0`、strip 済み） |
+| artifact の同一性 | `sha256 1c2c17b3...` がホストと端末で一致（`NEEDED 0`、strip 済み） |
 | `./slim/deploy/run-on-t830.sh` | exit 0：スラッシュコマンドの書き込みと読み戻し、session ストア、`--dry-run-writes` が何も書かないこと、fail-closed の拒否がすべて期待どおり |
 | LAN 経由の live model ターン | ストリーム回答、続いて `--history 6` が前のターンの数字を再現、`--history 0` では再現できない —— 負のコントロール |
 | **モデルが端末自身で動く場合** | loopback の `llama-server` + 0.5B Q4：4 秒で `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` がそれらのターンを再生、主エンドポイントが落ちても `--fallback-url` が回答 |

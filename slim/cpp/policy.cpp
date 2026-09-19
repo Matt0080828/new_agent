@@ -1,5 +1,7 @@
 #include "policy.hpp"
 
+#include "util.hpp"
+
 #include <cstdio>
 #include <cstring>
 
@@ -22,6 +24,10 @@ const char* const kStateSuffixes[] = {
 };
 
 const char* const kBinaryNames[] = {"slim-agent", "slim-agent-t830"};
+
+// The command allowlist is a permission file: if a tool could rewrite it, the model could
+// grant itself every command in the list.
+const char* const kProtectedNames[] = {"commands.allow"};
 
 // A session directory holds append-only conversation state. write_file is jailed to
 // data_dir, which is also where sessions live, so without this rule the model could
@@ -60,6 +66,12 @@ bool protected_path(const std::string& rel, std::string& why) {
       return true;
     }
   }
+  for (size_t i = 0; i < sizeof(kProtectedNames) / sizeof(kProtectedNames[0]); ++i) {
+    if (base == kProtectedNames[i]) {
+      why = "refusing to write " + base + ": it is a permission file (the command allowlist)";
+      return true;
+    }
+  }
   for (size_t i = 0; i < sizeof(kBinaryNames) / sizeof(kBinaryNames[0]); ++i) {
     if (base == kBinaryNames[i]) {
       why = "refusing to overwrite the agent binary " + base;
@@ -73,8 +85,12 @@ bool protected_path(const std::string& rel, std::string& why) {
   return false;
 }
 
+bool exec_allowed(const Policy& policy, const std::string& name) {
+  return policy.allow_exec && string_in_list(policy.exec_allow, name);
+}
+
 bool is_mutating_tool(const std::string& tool) {
-  return tool == "write_file" || tool == "mqtt_publish";
+  return tool == "write_file" || tool == "mqtt_publish" || tool == "run_command";
 }
 
 bool approve_mutation(const Policy& policy, const std::string& tool, const std::string& detail,
@@ -85,6 +101,7 @@ bool approve_mutation(const Policy& policy, const std::string& tool, const std::
   }
   bool allowed = (tool == "write_file")   ? policy.allow_write
                  : (tool == "mqtt_publish") ? policy.allow_mqtt
+                 : (tool == "run_command")  ? policy.allow_exec
                                             : false;
   if (allowed) {
     why = "allowed by policy";
@@ -92,8 +109,8 @@ bool approve_mutation(const Policy& policy, const std::string& tool, const std::
   }
   if (!policy.interactive) {
     why = "blocked by policy: model-initiated " + tool +
-          " is not enabled (use --allow-write / --allow-mqtt, or SLIM_ALLOW_WRITE=1 / "
-          "SLIM_ALLOW_MQTT=1)";
+          " is not enabled (use --allow-write / --allow-mqtt / --allow-exec, or "
+          "SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1 / SLIM_ALLOW_EXEC=1)";
     return false;
   }
   std::fprintf(stderr, "[slim] approve model tool %s (%s)? [y/N] ", tool.c_str(), detail.c_str());

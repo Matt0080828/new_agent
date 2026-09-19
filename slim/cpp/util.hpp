@@ -20,5 +20,23 @@ std::string read_file_limited(const std::string& path, size_t maxn);
 bool write_file_limited(const std::string& path, const std::string& data, size_t maxn, std::string& err);
 void list_text_files(const std::string& root, const std::string& prefix,
                      std::vector<std::pair<std::string, std::string> >& out);
+bool string_in_list(const std::vector<std::string>& list, const std::string& s);
+// Runs argv directly - there is no shell involved anywhere in this path, so a `;`, `|`, `$()`
+// or backtick inside an argument is just a character that reaches the program as one argument.
+// stdout and stderr are captured together, capped at max_bytes; the child is killed after
+// timeout_sec. Returns false with err set when the command cannot be started or had to be
+// killed for running too long.
+bool run_argv_capture(const std::vector<std::string>& argv, const std::string& search_path,
+                      int timeout_sec, size_t max_bytes, std::string& out, int& status,
+                      std::string& err);
+// One name per line, blanks and `#` comments ignored; a missing file is an empty list, because
+// "no allowlist" must mean "nothing is allowed", never "everything is allowed".
+std::vector<std::string> load_name_list(const std::string& path);
+// A bare command name: no slash, no `.`/`..`, nothing empty. Paths are refused so a model
+// cannot point the runner at a binary it just wrote into the data directory.
+bool bare_command_name(const std::string& name);
+// Absolute path of `name`, searched in search_path (colon separated) and then the usual
+// system directories. Empty when it is not found.
+std::string find_command(const std::string& name, const std::string& search_path);
 
 #endif

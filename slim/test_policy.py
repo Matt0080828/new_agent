@@ -74,6 +74,37 @@ class ApprovalTests(unittest.TestCase):
         self.assertTrue(policy.approve_tool(publish_policy, "mqtt_publish")[0])
         self.assertFalse(policy.approve_tool(publish_policy, "write_file")[0])
 
+    def test_run_command_needs_the_opt_in_and_the_allowlist(self):
+        pol = {"allow_exec": False, "exec_allow": ["uptime"]}
+        ok, why = policy.approve_tool(pol, "run_command", "uptime", human=False)
+        self.assertFalse(ok, "an allowlisted command still needs --allow-exec for the model")
+        self.assertIn("allow-exec", why)
+        pol["allow_exec"] = True
+        ok, _ = policy.approve_tool(pol, "run_command", "uptime", human=False)
+        self.assertTrue(ok)
+        ok, _ = policy.approve_tool(pol, "run_command", "uptime", human=True)
+        self.assertTrue(ok, "the operator may run an allowlisted command")
+        self.assertFalse(policy.exec_allowed(pol, "reboot"))
+        self.assertFalse(policy.exec_allowed({"allow_exec": False, "exec_allow": ["uptime"]},
+                                            "uptime"))
+        self.assertTrue(policy.exec_allowed(pol, "uptime"))
+
+    def test_commands_allow_is_a_permission_file(self):
+        reason = policy.protected_path("commands.allow")
+        self.assertIsNotNone(reason, "the allowlist must not be writable through a tool")
+        self.assertIn("permission file", reason)
+        self.assertIn("run_command", policy.MUTATING_TOOLS)
+
+    def test_load_allowlist_ignores_blanks_and_comments(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "commands.allow")
+        with open(path, "w") as fh:
+            fh.write("# comment\n\ndf\n  uptime  \n")
+        self.assertEqual(policy.load_allowlist(path), ["df", "uptime"])
+        self.assertEqual(policy.load_allowlist(os.path.join(d, "missing")), [],
+                         "no file means nothing may run")
+
     def test_human_initiated_allowed(self):
         ok, why = policy.approve_tool({}, "write_file", human=True)
         self.assertTrue(ok)

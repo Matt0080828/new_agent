@@ -23,15 +23,15 @@ slim/README.md   the manual: build, deploy, install, configure, model on the dev
 ## Build and test on the host
 
 ```bash
-cd slim/cpp && make && make test                              # 74 + 54 + 39 + 43 = 210 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 89 tests, standard library only
+cd slim/cpp && make && make test                              # 81 + 54 + 39 + 53 = 227 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 97 tests, standard library only
 ```
 
 ## Build for the CPE
 
 ```bash
-make -C slim/cpp t830           # dynamic, 121,736 bytes; needs libstdc++/libgcc on the device
-make -C slim/cpp t830-static    # 698,664 bytes, NEEDED 0, stripped; nothing to install there
+make -C slim/cpp t830           # dynamic, 138,240 bytes; needs libstdc++/libgcc on the device
+make -C slim/cpp t830-static    # 715,048 bytes, NEEDED 0, stripped; nothing to install there
 ```
 
 ## Put it on the CPE
@@ -85,7 +85,7 @@ numbers, and the caveats.
 
 | Check | Result on the CPE |
 | --- | --- |
-| artifact integrity | `sha256 5de6ea50...` matches on host and device (`NEEDED 0`, stripped) |
+| artifact integrity | `sha256 1c2c17b3...` matches on host and device (`NEEDED 0`, stripped) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: slash commands with read-back, the session store, `--dry-run-writes` writing nothing, every fail-closed refusal |
 | live model turn over the LAN | a streamed answer, then `--history 6` recalling the number from the earlier turn, then `--history 0` failing to - the negative control |
 | **model on the device itself** | `llama-server` on loopback + a 0.5B Q4: `PONG!` in 4 s, 12 tok/s prompt / 7.9 tok/s generation, `/history` replaying those turns, and `--fallback-url` answering through a dead primary |

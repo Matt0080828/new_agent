@@ -101,6 +101,45 @@ class MqttHttpTests(unittest.TestCase):
         self.assertIn("mqtt http", out)
         body = json.loads(self.httpd.last.decode("utf-8"))
         self.assertEqual(body["topic"], "t/a")
+class RunCommandTests(unittest.TestCase):
+    """Executing a command: three gates, and no shell anywhere."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.conn = rag.connect(os.path.join(self.dir, "slim.sqlite"))
+
+    def test_no_allowlist_means_nothing_runs(self):
+        with self.assertRaises(ValueError) as cm:
+            tools.run_tool("run_command", {"command": "echo", "args": "hi"}, self.conn, self.dir,
+                     exec_allow=[])
+        self.assertIn("allowlist", str(cm.exception))
+
+    def test_a_path_is_refused(self):
+        with self.assertRaises(ValueError) as cm:
+            tools.run_tool("run_command", {"command": "/bin/echo"}, self.conn, self.dir,
+                     exec_allow=["echo"])
+        self.assertIn("bare command name", str(cm.exception))
+
+    def test_allowlisted_command_runs(self):
+        out = tools.run_tool("run_command", {"command": "echo", "args": "hi there"}, self.conn,
+                       self.dir, exec_allow=["echo"])
+        self.assertTrue(out.startswith("exit 0"), out)
+        self.assertIn("hi there", out)
+
+    def test_arguments_are_not_shell_syntax(self):
+        args = "a; echo b `id` $(whoami) | cat"
+        out = tools.run_tool("run_command", {"command": "echo", "args": args}, self.conn, self.dir,
+                       exec_allow=["echo"])
+        self.assertIn(args, out, "the argument reached the program verbatim")
+        self.assertNotIn("uid=", out, "the backtick did not run id")
+
+    def test_missing_command_is_reported(self):
+        with self.assertRaises(ValueError) as cm:
+            tools.run_tool("run_command", {"command": "definitely-not-a-command"}, self.conn,
+                     self.dir, exec_allow=["definitely-not-a-command"])
+        self.assertIn("command not found", str(cm.exception))
+
+
 class ToolBudgetTests(unittest.TestCase):
     def test_under_the_budget_passes_through(self):
         b = tools.ToolBudget(100)

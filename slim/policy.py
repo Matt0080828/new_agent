@@ -15,7 +15,7 @@ denied rather than allowed, so a future tool cannot become writable by accident.
 """
 import os
 
-MUTATING_TOOLS = ("write_file", "mqtt_publish")
+MUTATING_TOOLS = ("write_file", "mqtt_publish", "run_command")
 READ_ONLY_TOOLS = ("rag_search", "read_file")
 
 # Suffixes that mean "this is agent state, not user content".
@@ -25,6 +25,8 @@ _STATE_SUFFIXES = (
     ".db-wal", ".db-journal", ".db-shm",
 )
 _BINARY_NAMES = ("slim-agent", "slim-agent-t830")
+# Permission files: if a tool could rewrite one, the model could grant itself access.
+_PROTECTED_NAMES = ("commands.allow",)
 
 
 def protected_path(rel):
@@ -43,6 +45,8 @@ def protected_path(rel):
         if base.endswith(suffix):
             return ("refusing to write %s: looks like an agent state/database file (%s)"
                     % (base, suffix))
+    if base in _PROTECTED_NAMES:
+        return ("refusing to write %s: it is a permission file (the command allowlist)" % base)
     if base in _BINARY_NAMES:
         return "refusing to overwrite the agent binary %s" % base
     if len(base) > 1 and base.startswith("."):
@@ -64,6 +68,8 @@ def tool_allowed(policy, tool):
         return bool((policy or {}).get("allow_write"))
     if tool == "mqtt_publish":
         return bool((policy or {}).get("allow_mqtt"))
+    if tool == "run_command":
+        return bool((policy or {}).get("allow_exec"))
     return False
 
 
@@ -83,8 +89,8 @@ def approve_tool(policy, tool, detail="", human=False, input_fn=None):
         return True, "allowed by policy"
     if not (policy or {}).get("interactive"):
         return False, ("blocked by policy: model-initiated %s is not enabled "
-                       "(use --allow-write / --allow-mqtt, or SLIM_ALLOW_WRITE=1 / "
-                       "SLIM_ALLOW_MQTT=1)" % tool)
+                       "(use --allow-write / --allow-mqtt / --allow-exec, or "
+                       "SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1 / SLIM_ALLOW_EXEC=1)" % tool)
     ask = input_fn or input
     try:
         answer = ask("approve model tool %s (%s)? [y/N] " % (tool, detail))
@@ -93,6 +99,29 @@ def approve_tool(policy, tool, detail="", human=False, input_fn=None):
     if answer.strip().lower() in ("y", "yes"):
         return True, "approved at prompt"
     return False, "denied at prompt"
+
+
+def exec_allowed(policy, name):
+    """True when name may be run at all. The allowlist is the gate for everyone, the
+    operator included; allow_exec only decides the model's side."""
+    if not (policy or {}).get("allow_exec"):
+        return False
+    return bool(name) and name in ((policy or {}).get("exec_allow") or [])
+
+
+def load_allowlist(path):
+    """One command name per line, blanks and # comments ignored. A missing file is an
+    empty list: no allowlist means nothing may run, never everything."""
+    names = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                s = line.strip()
+                if s and not s.startswith("#"):
+                    names.append(s)
+    except OSError:
+        return []
+    return names
 
 
 # Backwards-friendly alias used by the C++ naming.

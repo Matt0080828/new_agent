@@ -15,6 +15,12 @@ void audit_tool(const std::string& tool, const std::string& detail, bool allowed
             << ": " << why << "\n";
 }
 
+std::string int_str(long n) {
+  std::ostringstream o;
+  o << n;
+  return o.str();
+}
+
 std::string number(size_t n) {
   std::ostringstream o;
   o << n;
@@ -117,7 +123,7 @@ void ChangeQueue::clear() {
 
 bool known_tool(const std::string& name) {
   return name == "rag_search" || name == "read_file" || name == "write_file" ||
-         name == "mqtt_publish";
+         name == "mqtt_publish" || name == "run_command";
 }
 
 std::string run_tool(const ToolEnv& env, const std::string& name, const std::string& obj,
@@ -186,6 +192,53 @@ std::string run_tool(const ToolEnv& env, const std::string& name, const std::str
     if (!r.error.empty() && r.status == 0)
       return "tool error: " + r.error;
     result = "mqtt http " + r.body.substr(0, 200);
+  } else if (name == "run_command") {
+    // Execution is the one tool that changes the machine, so it has three gates, in order:
+    // a bare command name (no paths - a model must not point this at a binary it wrote),
+    // membership in the allowlist (a missing or empty file permits nothing), and the usual
+    // model-initiated approval. No shell is involved at any point in this path.
+    std::string cmd, argstr, why;
+    json_get_string_field(obj, "command", cmd);
+    json_get_string_field(obj, "args", argstr);
+    if (!bare_command_name(cmd)) {
+      audit_tool(name, cmd, false, "refusing a command that is not a bare name");
+      return "tool error: refusing to run '" + cmd +
+             "': a bare command name is required (no path, no directory part)";
+    }
+    if (!string_in_list(env.policy.exec_allow, cmd)) {
+      audit_tool(name, cmd, false, "not in the command allowlist");
+      return "tool error: refusing to run " + cmd +
+             ": it is not in the command allowlist (<data-dir>/commands.allow)";
+    }
+    if (!approve_mutation(env.policy, name, cmd, human_initiated, why)) {
+      audit_tool(name, cmd, false, why);
+      return "tool error: " + why;
+    }
+    // Whitespace-split arguments: no quoting, no globbing, no shell. Each token is one
+    // argv entry, so `;`, `|` or `$(...)` inside a token is just a character.
+    std::vector<std::string> argv;
+    argv.push_back(cmd);
+    {
+      std::string cur;
+      for (size_t i = 0; i <= argstr.size(); ++i) {
+        if (i == argstr.size() || argstr[i] == ' ' || argstr[i] == '\t') {
+          if (!cur.empty()) {
+            argv.push_back(cur);
+            cur.clear();
+          }
+        } else {
+          cur.push_back(argstr[i]);
+        }
+      }
+    }
+    audit_tool(name, cmd + (argstr.empty() ? std::string() : " " + argstr), true, why);
+    std::string out, err;
+    int status = 0;
+    if (!run_argv_capture(argv, env.exec_path, kExecTimeoutSec, kMaxExecOutput, out, status, err)) {
+      audit_tool(name, cmd, false, err);
+      return "tool error: " + err;
+    }
+    result = "exit " + int_str(status) + "\n" + out;
   } else {
     // Unknown tool: refused rather than ignored, so a typo or a new tool name cannot
     // silently pass through.

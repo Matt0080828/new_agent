@@ -14,11 +14,19 @@ const size_t kMaxWrite = 8 * 1024;
 const size_t kMaxQueuedFiles = 16;
 const size_t kMaxQueuedBytes = 64 * 1024;
 
+// Wall-clock budget and output cap for run_command. A 0.5B model in a loop must not be able
+// to keep the device busy or flood the conversation with one command.
+const int kExecTimeoutSec = 10;
+const size_t kMaxExecOutput = 16 * 1024;
+
 // Everything the tool layer needs. A struct (rather than the agent's argv-derived Cfg)
 // so the tool layer can be driven straight from tests.
 struct ToolEnv {
   std::string data_dir;
   std::string mqtt_http;
+  // Colon-separated directories searched for an allowlisted command; empty means the
+  // usual /bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin.
+  std::string exec_path;
   Policy policy;
   // Read-only RAG is injected instead of reimplemented here: the agent owns the index,
   // and a test can stub it.

@@ -17,7 +17,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 from error import SlimError
-from policy import approve_tool
+from policy import approve_tool, load_allowlist
 from retry import DEFAULT_ATTEMPTS, DEFAULT_BASE_DELAY, DEFAULT_MAX_TOTAL, run_with_retry
 from rag import connect, ingest_tree, log_turn, search
 from session import session_append, session_load, session_path, valid_session_name
@@ -249,7 +249,9 @@ def run_turn(user_text, cfg, conn):
         if ok:
             try:
                 result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "",
-                                  queue=queue, budget=budget)
+                                  queue=queue, budget=budget,
+                                  exec_allow=(cfg.get("policy") or {}).get("exec_allow"),
+                                  exec_path=cfg.get("exec_path"))
             except (ValueError, OSError) as exc:
                 result = "tool error: %s" % exc
         else:
@@ -307,6 +309,8 @@ def _parse_args(argv):
     p.add_argument("--allow-write", action="store_true",
                    default=os.environ.get("SLIM_ALLOW_WRITE", "") == "1",
                    help="allow model-initiated write_file (default: denied)")
+    p.add_argument("--allow-exec", action="store_true",
+                   help="let the model run commands (only bare names in <data-dir>/commands.allow)")
     p.add_argument("--allow-mqtt", action="store_true",
                    default=os.environ.get("SLIM_ALLOW_MQTT", "") == "1",
                    help="allow model-initiated mqtt_publish (default: denied)")
@@ -357,6 +361,11 @@ def build_cfg(args):
         "policy": {
             "allow_write": bool(args.allow_write or file_cfg.get("allow_write")),
             "allow_mqtt": bool(args.allow_mqtt or file_cfg.get("allow_mqtt")),
+            "allow_exec": bool(args.allow_exec or file_cfg.get("allow_exec")),
+            # Read once, from the data directory. protected_path() keeps a tool from
+            # writing it, so the model cannot grant itself a command; no file means
+            # nothing may run.
+            "exec_allow": load_allowlist(os.path.join(data_dir, "commands.allow")),
             # Only prompt when a terminal is attached and the operator did not
             # opt out; otherwise the gate denies instead of blocking forever.
             "interactive": (not args.non_interactive) and sys.stdin.isatty(),

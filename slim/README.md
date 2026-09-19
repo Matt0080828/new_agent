@@ -188,7 +188,7 @@ The C++ client prints the budget summary and the manifest per turn too, and its
 
 ## Tests
 
-All seven files together are **89 tests**; the one-shot form is
+All seven files together are **97 tests**; the one-shot form is
 `python3 -S -m unittest discover -s slim -p 'test_*.py'`.
 
 ```bash
@@ -213,20 +213,20 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 74 + 54 + 39 + 43 = 210 checks in four binaries
+make -C slim/cpp test        # 81 + 54 + 39 + 53 = 227 checks in four binaries
 ./slim/cpp/slim-agent --help
 ```
 
 T830 (OpenWrt musl gcc 9.3):
 
 ```bash
-make -C slim/cpp t830          # dynamic, stripped, 121,736 bytes (~119 KB)
-make -C slim/cpp t830-static   # self-contained, 698,664 bytes (~682 KB), no NEEDED libs
+make -C slim/cpp t830          # dynamic, stripped, 138,240 bytes (~135 KB)
+make -C slim/cpp t830-static   # self-contained, 715,048 bytes (~698 KB), no NEEDED libs
 file slim/cpp/slim-agent-t830-static
 # ELF aarch64, statically linked, stripped, interpreter-less
 ```
 
-The current tree builds to `sha256 5de6ea50…` (static) - the same bytes that were run on
+The current tree builds to `sha256 1c2c17b3…` (static) - the same bytes that were run on
 the device, so a rebuild can be compared with the verified build before deploying.
 
 Two artifacts on purpose. `slim-agent-t830` is the small one and needs
@@ -348,11 +348,11 @@ either (verified: `--help` from `/data/slim` exits 0).
 docker cp slim/cpp/slim-agent-t830-static adb-t830-run:/tmp/stage-binary
 docker exec adb-t830-run adb shell 'mkdir -p /data/slim/skills /data/slim/docs /data/slim/data &&
   cp /tmp/stage-binary /data/slim/slim-agent && chmod 755 /data/slim/slim-agent'
-docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still 5de6ea50...
+docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still 1c2c17b3...
 docker exec adb-t830-run adb shell 'cd /data/slim && ./slim-agent --help | head -3'
 ```
 
-That install is 700 KB. Keep the corpus and the sessions on `/data` (the roomier one) and the
+That install is about 760 KB (the static binary is 715 KB). Keep the corpus and the sessions on `/data` (the roomier one) and the
 binary wherever you like.
 
 The C++ client has **no config file**: flags and environment only, and **a flag beats the
@@ -377,6 +377,7 @@ created `flagwins.jsonl`). Every setting it understands, with the real defaults 
 | Streaming | `--stream` | `SLIM_STREAM=1` | off |
 | Model may write files | `--allow-write` | `SLIM_ALLOW_WRITE=1` | off, denied |
 | Model may publish | `--allow-mqtt` | `SLIM_ALLOW_MQTT=1` | off, denied |
+| Model may run commands | `--allow-exec` | `SLIM_ALLOW_EXEC=1` | off, denied; an allowlisted bare name in `<data-dir>/commands.allow` is required as well |
 | Approval prompt | `--non-interactive` / `--interactive` | - | on only when stdin is a tty, otherwise deny |
 | Stage writes, write nothing | `--dry-run-writes` | `SLIM_DRY_RUN_WRITES=1` | off |
 | Retry budget | `--attempts`, `--retry-base-ms` | `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS` | `3`, `500` ms |
@@ -516,6 +517,8 @@ Verified on the device (static build, sha256-matched):
 | `/history` | reports an empty session until a model turn is recorded |
 | `--dry-run-writes` | prints the manifest and writes nothing |
 | `sessions/...`, `*.sqlite`, `../escape` writes | all refused, with the expected wording |
+| `/run df -h` (allowlisted) | exit 0 with the real table; `ls` refused (not allowlisted), `/bin/ls` refused (a path) |
+| a model asked to run a command | describes it and executes nothing - the C++ client has no tool-call path |
 | unreachable model endpoint | 3 attempts, then fails: bounded retry, no loop |
 
 Device facts measured on the box: OpenWrt 23.05.5, kernel 5.15.167,
@@ -562,27 +565,49 @@ longer one, change that constant and rebuild; the Python client has the knob as
 
 Gateway, dashboard, Honcho, embeddings, MCP, arbitrary shell, full Hermes skills, 3B local models.
 
-### There is no way to run a system command, and that is deliberate
+### Running a command on the device: opt-in, allowlisted, shell-free
 
-The tool registry holds exactly four tools - `rag_search`, `read_file`, `write_file`,
-`mqtt_publish` - and the sources contain no way to run a process: no `system`, `popen`, `exec*`
-or `fork` in the C++ client, and no `subprocess`/`os.system` in the Python one. A tool name the
-policy cannot classify is denied, never allowed, so a newly invented tool cannot open a hole by
-accident. Checked on the device:
+The tool layer has a fifth tool, `run_command`, and it is the one that changes the machine, so
+it has three gates that all have to open:
+
+1. **The name has to be on the allowlist** - one bare command name per line in
+   `<data-dir>/commands.allow`. A missing or empty file permits nothing, never everything. This
+   gate applies to the operator too: the allowlist, not a flag, decides which commands exist for
+   this agent at all.
+2. **The name has to be bare** - no `/`, no `.`/`..`. A path is refused even when its last
+   component is allowlisted, so nothing can point the runner at a binary written into the data
+   directory.
+3. **The model needs its own opt-in** - `--allow-exec` / `SLIM_ALLOW_EXEC=1`, on top of the
+   allowlist, before a model-initiated call runs. With a terminal attached an unapproved call
+   prompts `[y/N]`; without one it is denied.
+
+**There is no shell anywhere in the path.** The command is `execv`'d with an argv array, and the
+model-supplied argument string is split on whitespace, so `;`, `|`, `$(...)` and backticks are
+ordinary characters rather than syntax. The status and the merged stdout/stderr come back as
+`exit N` plus text, capped at 16 KiB, and the child is killed after 10 s.
+
+The allowlist is a permission file: `write_file` refuses it, like the session store and
+`*.sqlite`, so a model with `--allow-write` still cannot grant itself a command.
+
+Checked on the device (allowlist: `df`, `uptime`):
 
 ```
-$ ./slim-agent ... --once '/exec id'          -> unknown command; /help
-$ ./slim-agent ... --once '/sh ls /'          -> unknown command; /help
-$ ./slim-agent ... --once '/read /etc/passwd' -> tool error: path must be relative and stay in data dir
+$ ./slim-agent ... --once '/run df -h'      -> exit 0, the real df table from the CPE
+$ ./slim-agent ... --once '/run uptime'     -> exit 0, "up 19:30, load average: ..."
+$ ./slim-agent ... --once '/run ls /'       -> refusing to run ls: it is not in the command allowlist
+$ ./slim-agent ... --once '/run /bin/ls'    -> a bare command name is required (no path)
+$ ./slim-agent ... --allow-write --once '/write commands.allow reboot'
+                                             -> it is a permission file (the command allowlist)
 ```
 
-Two consequences worth knowing. A model that answers "the output of `id` is ..." is making it up
-- nothing ran, and an agent that cannot execute anything cannot be talked into executing
-something by a poisoned markdown file in the corpus. And `/read` is jailed to `--data-dir`
-while `/rag` searches `--skills-dir`/`--docs-dir`, so corpus files are searchable but not
-readable as files unless they live inside the data directory.
+Two things worth knowing about who can pull the trigger. The **C++ client has no model tool-call
+path at all** - it never parses a tool request out of a reply - so on the CPE `/run` is driven by
+the operator (or by a script feeding the resident stdin loop), and a model asked to run something
+can only describe it. The Python client does let the model call tools, so there `--allow-exec`
+plus the allowlist is what stands between a poisoned markdown file and a command. And `/read` is
+jailed to `--data-dir` while `/rag` searches `--skills-dir`/`--docs-dir`, so corpus files are
+searchable but not readable as files unless they live inside the data directory.
 
-If the device should *act*, the sanctioned path is MQTT: `--mqtt-http` plus `--allow-mqtt`
-lets the agent publish to a topic, and the consumer that turns a topic into an action is a
-separate program you write and audit. Keeping the privilege on the far side of a broker is
-what makes the fail-closed policy here worth anything.
+If the device should act on its own, MQTT (`--mqtt-http` plus `--allow-mqtt`) remains the option
+that keeps the privilege on the far side of a broker; `run_command` is for the cases where a
+named command on this box is exactly what you want, and the allowlist is the contract.

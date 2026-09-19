@@ -5,6 +5,8 @@ similar) is never writable, whoever asks, because one write_file call used to be
 able to overwrite the agent's own database inside data_dir.
 """
 import json
+import shutil
+import subprocess
 import os
 import urllib.error
 import urllib.request
@@ -120,6 +122,7 @@ TOOLS = (
     "read_file: {\"tool\":\"read_file\",\"path\":\"relative.md\"}",
     "write_file: {\"tool\":\"write_file\",\"path\":\"note.txt\",\"content\":\"...\"}",
     "mqtt_publish: {\"tool\":\"mqtt_publish\",\"topic\":\"a/b\",\"payload\":\"hi\"}  (needs SLIM_MQTT_HTTP)",
+    "run_command: {\"tool\":\"run_command\",\"command\":\"uptime\",\"args\":\"-s\"}  (needs --allow-exec and a name in commands.allow)",
 )
 
 
@@ -133,6 +136,17 @@ def _jail(data_dir, rel):
     return full
 
 
+EXEC_TIMEOUT = 10          # seconds; a runaway command must not hold the turn open
+MAX_EXEC_OUTPUT = 16 * 1024
+DEFAULT_EXEC_PATH = "/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin"
+
+
+def _bare_command_name(name):
+    """No path, no `.`/`..`: a model must not point the runner at something it wrote into
+    the data directory."""
+    return bool(name) and name not in (".", "..") and "/" not in name
+
+
 def _bounded(budget, text):
     """Every successful tool result passes the same budget so no tool can flood the
     conversation. Errors are returned unbudgeted on purpose: they are short, and they are
@@ -140,7 +154,8 @@ def _bounded(budget, text):
     return budget.add(text) if budget else text
 
 
-def run_tool(name, args, conn, data_dir, mqtt_http="", queue=None, budget=None):
+def run_tool(name, args, conn, data_dir, mqtt_http="", queue=None, budget=None,
+             exec_allow=None, exec_path=None):
     args = args or {}
     if name == "rag_search":
         hits = rag_search(conn, args.get("query") or "", limit=int(args.get("limit") or 3))
@@ -192,6 +207,31 @@ def run_tool(name, args, conn, data_dir, mqtt_http="", queue=None, budget=None):
         except urllib.error.URLError as exc:
             raise ValueError("mqtt http failed: %s" % exc.reason)
         return _bounded(budget, "mqtt http %s" % body[:200].decode("utf-8", "replace"))
+    if name == "run_command":
+        # Three gates, same order as the C++ side: a bare name, the allowlist (a missing
+        # file permits nothing), and the model opt-in, which approve_tool() already applied
+        # before this call. shell is never involved - argv reaches the program as-is.
+        cmd = (args.get("command") or "").strip()
+        if not _bare_command_name(cmd):
+            raise ValueError("refusing to run '%s': a bare command name is required "
+                             "(no path, no directory part)" % cmd)
+        if cmd not in list(exec_allow or []):
+            raise ValueError("refusing to run %s: it is not in the command allowlist "
+                             "(<data-dir>/commands.allow)" % cmd)
+        path = shutil.which(cmd, path=exec_path or DEFAULT_EXEC_PATH)
+        if not path:
+            raise ValueError("command not found: %s" % cmd)
+        argv = [path] + str(args.get("args") or "").split()
+        try:
+            proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, timeout=EXEC_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise ValueError("command timed out after %ds" % EXEC_TIMEOUT)
+        raw = proc.stdout or b""
+        out = raw[:MAX_EXEC_OUTPUT].decode("utf-8", "replace").rstrip("\n")
+        if len(raw) > MAX_EXEC_OUTPUT:
+            out += "\n[output truncated at %d bytes]" % MAX_EXEC_OUTPUT
+        return _bounded(budget, "exit %d\n%s" % (proc.returncode, out))
     raise ValueError("unknown tool: %s" % name)
 
 

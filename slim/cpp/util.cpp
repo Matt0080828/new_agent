@@ -8,6 +8,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cerrno>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <sys/wait.h>
+
 bool has_suffix(const std::string& s, const std::string& suffix) {
   if (suffix.empty())
     return true;
@@ -250,4 +257,222 @@ static void walk(const std::string& dir, const std::string& prefix,
 void list_text_files(const std::string& root, const std::string& prefix,
                      std::vector<std::pair<std::string, std::string> >& out) {
   walk(root, prefix, out);
+}
+
+// ---- added: running a command without a shell (see run_argv_capture) ----
+
+namespace {
+
+std::vector<std::string> split_search_path(const std::string& p) {
+  std::vector<std::string> dirs;
+  std::string cur;
+  for (size_t i = 0; i <= p.size(); ++i) {
+    if (i == p.size() || p[i] == ':') {
+      if (!cur.empty())
+        dirs.push_back(cur);
+      cur.clear();
+    } else {
+      cur.push_back(p[i]);
+    }
+  }
+  return dirs;
+}
+
+bool is_executable_file(const std::string& path) {
+  struct stat st;
+  if (stat(path.c_str(), &st) != 0)
+    return false;
+  if (!S_ISREG(st.st_mode))
+    return false;
+  return access(path.c_str(), X_OK) == 0;
+}
+
+std::string num_str(long n) {
+  std::ostringstream o;
+  o << n;
+  return o.str();
+}
+
+std::string strip_trailing_newlines(const std::string& s) {
+  std::string out = s;
+  while (!out.empty() && (out[out.size() - 1] == '\n' || out[out.size() - 1] == '\r'))
+    out.resize(out.size() - 1);
+  return out;
+}
+
+}  // namespace
+
+bool string_in_list(const std::vector<std::string>& list, const std::string& s) {
+  for (size_t i = 0; i < list.size(); ++i) {
+    if (list[i] == s)
+      return true;
+  }
+  return false;
+}
+
+bool bare_command_name(const std::string& name) {
+  if (name.empty() || name == "." || name == "..")
+    return false;
+  if (name.find('/') != std::string::npos)
+    return false;
+  for (size_t i = 0; i < name.size(); ++i) {
+    if (name[i] == '\n' || name[i] == '\r')
+      return false;
+  }
+  return true;
+}
+
+std::string find_command(const std::string& name, const std::string& search_path) {
+  if (!bare_command_name(name))
+    return std::string();
+  std::string all = search_path.empty()
+                        ? std::string("/bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin")
+                        : search_path;
+  std::vector<std::string> dirs = split_search_path(all);
+  for (size_t i = 0; i < dirs.size(); ++i) {
+    std::string cand = dirs[i] + "/" + name;
+    if (is_executable_file(cand))
+      return cand;
+  }
+  return std::string();
+}
+
+std::vector<std::string> load_name_list(const std::string& path) {
+  std::vector<std::string> names;
+  std::ifstream in(path.c_str());
+  if (!in)
+    return names;  // no file means nothing is permitted, never everything
+  std::string line;
+  while (std::getline(in, line)) {
+    std::string s = line;
+    while (!s.empty() && (s[0] == ' ' || s[0] == '\t' || s[0] == '\r'))
+      s.erase(0, 1);
+    while (!s.empty() && (s[s.size() - 1] == ' ' || s[s.size() - 1] == '\t' ||
+                          s[s.size() - 1] == '\r'))
+      s.resize(s.size() - 1);
+    if (s.empty() || s[0] == '#')
+      continue;
+    names.push_back(s);
+  }
+  return names;
+}
+
+bool run_argv_capture(const std::vector<std::string>& argv, const std::string& search_path,
+                      int timeout_sec, size_t max_bytes, std::string& out, int& status,
+                      std::string& err) {
+  out.clear();
+  status = -1;
+  err.clear();
+  if (argv.empty()) {
+    err = "no command";
+    return false;
+  }
+  std::string path = find_command(argv[0], search_path);
+  if (path.empty()) {
+    err = "command not found: " + argv[0];
+    return false;
+  }
+
+  std::vector<char*> c_argv;
+  c_argv.push_back(const_cast<char*>(path.c_str()));
+  for (size_t i = 1; i < argv.size(); ++i)
+    c_argv.push_back(const_cast<char*>(argv[i].c_str()));
+  c_argv.push_back(0);
+
+  int fds[2];
+  if (pipe(fds) != 0) {
+    err = std::string("pipe failed: ") + std::strerror(errno);
+    return false;
+  }
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(fds[0]);
+    close(fds[1]);
+    err = std::string("fork failed: ") + std::strerror(errno);
+    return false;
+  }
+  if (pid == 0) {
+    // Child: both output streams into the pipe, stdin from /dev/null so a command that reads
+    // stdin cannot eat the agent's own input.
+    dup2(fds[1], 1);
+    dup2(fds[1], 2);
+    int devnull = open("/dev/null", O_RDONLY);
+    if (devnull >= 0) {
+      dup2(devnull, 0);
+      close(devnull);
+    }
+    close(fds[0]);
+    close(fds[1]);
+    execv(path.c_str(), &c_argv[0]);
+    _exit(127);  // reached only when execv failed
+  }
+
+  close(fds[1]);
+  bool truncated = false;
+  bool timed_out = false;
+  struct timeval start;
+  gettimeofday(&start, 0);
+  for (;;) {
+    struct timeval now;
+    gettimeofday(&now, 0);
+    double elapsed =
+        (double)(now.tv_sec - start.tv_sec) + (double)(now.tv_usec - start.tv_usec) / 1000000.0;
+    if (timeout_sec > 0 && elapsed >= (double)timeout_sec) {
+      timed_out = true;
+      break;
+    }
+    double left = timeout_sec > 0 ? ((double)timeout_sec - elapsed) : 1.0;
+    struct timeval tv;
+    tv.tv_sec = (time_t)left;
+    tv.tv_usec = (suseconds_t)((left - (double)tv.tv_sec) * 1000000.0);
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(fds[0], &rfds);
+    int ready = select(fds[0] + 1, &rfds, 0, 0, &tv);
+    if (ready < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+    if (ready == 0)
+      continue;  // no data yet: the loop re-checks the deadline
+    char buf[4096];
+    ssize_t n = read(fds[0], buf, sizeof(buf));
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      break;
+    }
+    if (n == 0)
+      break;  // EOF: the child closed the pipe
+    if (out.size() < max_bytes) {
+      size_t room = max_bytes - out.size();
+      size_t take = ((size_t)n < room) ? (size_t)n : room;
+      out.append(buf, take);
+      if (take < (size_t)n)
+        truncated = true;
+    } else {
+      truncated = true;
+    }
+  }
+  close(fds[0]);
+
+  if (timed_out)
+    kill(pid, SIGKILL);
+  int wait_status = 0;
+  while (waitpid(pid, &wait_status, 0) < 0 && errno == EINTR) {
+  }
+  if (WIFEXITED(wait_status))
+    status = WEXITSTATUS(wait_status);
+  else if (WIFSIGNALED(wait_status))
+    status = 128 + WTERMSIG(wait_status);
+
+  if (timed_out) {
+    err = "command timed out after " + num_str((long)timeout_sec) + "s";
+    return false;
+  }
+  out = strip_trailing_newlines(out);
+  if (truncated)
+    out += "\n[output truncated at " + num_str((long)max_bytes) + " bytes]";
+  return true;
 }

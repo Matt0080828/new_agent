@@ -333,6 +333,51 @@ static void test_mqtt() {
     std::cout << "      (server saw " << counted.size() << " requests)\n";
 }
 
+static void test_run_command() {
+  std::cout << "-- run_command: allowlist, no shell\n";
+  ToolEnv env;
+  env.data_dir = g_dir;
+  env.exec_path = "/bin:/usr/bin:/sbin:/usr/sbin";
+
+  // No allowlist at all: nothing may run, whatever the flags say.
+  std::string r = run_tool(env, "run_command", json_str("command", "echo"), true, 0, 0);
+  check(r.find("allowlist") != std::string::npos, "with no allowlist nothing runs");
+
+  env.policy.exec_allow.push_back("echo");
+  // A path is refused even when the name is on the list.
+  r = run_tool(env, "run_command", json_str("command", "/bin/echo"), true, 0, 0);
+  check(r.find("bare command name") != std::string::npos, "a path is refused");
+
+  // Allowlisted: it runs, and the status comes back.
+  r = run_tool(env, "run_command", json_str("command", "echo"), true, 0, 0);
+  check(r.find("exit 0") == 0, "an allowlisted command runs and reports its status");
+
+  // Arguments reach the program verbatim: there is no shell, so ; | $() and backticks are
+  // ordinary characters rather than syntax.
+  std::string args = "a; echo b `id` $(whoami) | cat";
+  std::string js = "{\"command\":\"echo\",\"args\":\"" + args + "\"}";
+  r = run_tool(env, "run_command", js, true, 0, 0);
+  check(r.find(args) != std::string::npos, "arguments arrive verbatim (no shell to reinterpret)");
+  check(r.find("uid=") == std::string::npos, "the backtick did not run id");
+
+  // Model-initiated execution needs its own opt-in on top of the allowlist.
+  r = run_tool(env, "run_command", json_str("command", "echo"), false, 0, 0);
+  check(r.find("not enabled") != std::string::npos, "the model needs --allow-exec");
+  env.policy.allow_exec = true;
+  r = run_tool(env, "run_command", json_str("command", "echo"), false, 0, 0);
+  check(r.find("exit 0") == 0, "with --allow-exec plus the allowlist the model may run it");
+
+  // Allowlisted but not installed: a clean error, not a crash.
+  env.policy.exec_allow.push_back("definitely-not-a-command");
+  r = run_tool(env, "run_command", json_str("command", "definitely-not-a-command"), true, 0, 0);
+  check(r.find("command not found") != std::string::npos, "a missing command is reported");
+
+  // The allowlist is a permission file: a tool must not be able to rewrite it.
+  std::string why;
+  check(protected_path("commands.allow", why), "commands.allow is refused by protected_path");
+  check(why.find("permission file") != std::string::npos, "and the reason says why");
+}
+
 int main() {
   char tmpl[] = "/tmp/slim-tools-test-XXXXXX";
   char* dir = mkdtemp(tmpl);
@@ -349,6 +394,7 @@ int main() {
   test_change_queue_caps();
   test_tool_budget();
   test_mqtt();
+  test_run_command();
   std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   if (g_failures) {
     std::cout << g_failures << " FAILED\n";

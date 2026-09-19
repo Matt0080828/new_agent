@@ -21,15 +21,15 @@ slim/README.md   完整手冊：建置、部署、安裝、設定、在裝置上
 ## 在主機上建置與測試
 
 ```bash
-cd slim/cpp && make && make test                              # 74 + 54 + 39 + 43 = 210 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 89 tests，只用標準庫
+cd slim/cpp && make && make test                              # 81 + 54 + 39 + 53 = 227 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 97 tests，只用標準庫
 ```
 
 ## 為 CPE 建置
 
 ```bash
-make -C slim/cpp t830           # 動態連結，121,736 bytes；裝置上需要 libstdc++/libgcc
-make -C slim/cpp t830-static    # 698,664 bytes、NEEDED 0、已 strip；裝置上不需安裝任何東西
+make -C slim/cpp t830           # 動態連結，138,240 bytes；裝置上需要 libstdc++/libgcc
+make -C slim/cpp t830-static    # 715,048 bytes、NEEDED 0、已 strip；裝置上不需安裝任何東西
 ```
 
 ## 放到 CPE 上
@@ -80,7 +80,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 
 | 檢查項目 | CPE 上的結果 |
 | --- | --- |
-| artifact 完整性 | `sha256 5de6ea50...` 在主機與裝置兩邊一致（`NEEDED 0`、已 strip） |
+| artifact 完整性 | `sha256 1c2c17b3...` 在主機與裝置兩邊一致（`NEEDED 0`、已 strip） |
 | `./slim/deploy/run-on-t830.sh` | exit 0：斜線指令寫入後讀回、session 儲存、`--dry-run-writes` 確實沒寫檔、每一項 fail-closed 拒絕都正確 |
 | 走 LAN 的 live model 回合 | 串流回答；接著 `--history 6` 重播並答出前一回合的數字；`--history 0` 則答不出來 —— 負向對照 |
 | **模型跑在裝置自己身上** | loopback 上的 `llama-server` + 0.5B Q4：4 秒回 `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` 能重播那些回合，且 `--fallback-url` 在主端點壞掉時仍能作答 |

@@ -22,15 +22,15 @@ slim/README.md   전체 매뉴얼: 빌드, 배포, 설치, 설정, 기기에서�
 ## 호스트에서 빌드와 테스트
 
 ```bash
-cd slim/cpp && make && make test                              # 74 + 54 + 39 + 43 = 210 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 89 tests, 표준 라이브러리만 사용
+cd slim/cpp && make && make test                              # 81 + 54 + 39 + 53 = 227 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 97 tests, 표준 라이브러리만 사용
 ```
 
 ## CPE용 빌드
 
 ```bash
-make -C slim/cpp t830           # 동적 링크, 121,736 bytes; 기기에 libstdc++/libgcc 필요
-make -C slim/cpp t830-static    # 698,664 bytes, NEEDED 0, strip 완료; 기기에 설치할 것이 없음
+make -C slim/cpp t830           # 동적 링크, 138,240 bytes; 기기에 libstdc++/libgcc 필요
+make -C slim/cpp t830-static    # 715,048 bytes, NEEDED 0, strip 완료; 기기에 설치할 것이 없음
 ```
 
 ## CPE에 넣기
@@ -84,7 +84,7 @@ server가 요구하는 것은 `libstdc++.so.6`, `libgcc_s.so.1`, musl `libc`뿐�
 
 | 검증 항목 | CPE에서의 결과 |
 | --- | --- |
-| artifact 무결성 | `sha256 5de6ea50...`이 호스트와 기기에서 일치(`NEEDED 0`, strip 완료) |
+| artifact 무결성 | `sha256 1c2c17b3...`이 호스트와 기기에서 일치(`NEEDED 0`, strip 완료) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: 슬래시 명령 쓰기 후 읽어오기, session 저장소, `--dry-run-writes`가 아무것도 쓰지 않음, fail-closed 거부 모두 정상 |
 | LAN 경유 live model 턴 | 스트림 답변, 이어서 `--history 6`이 이전 턴의 숫자를 재현, `--history 0`은 재현하지 못함 — 음성 대조 |
 | **모델이 기기 자체에서 도는 경우** | loopback의 `llama-server` + 0.5B Q4: 4초에 `PONG!`, prompt 12 tok/s, 생성 7.9 tok/s, `/history`가 그 턴들을 재생, 주 엔드포인트가 죽어도 `--fallback-url`이 응답 |

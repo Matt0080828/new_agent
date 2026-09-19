@@ -142,6 +142,23 @@ static void test_approval() {
   check(approve_mutation(mqtt_only, "mqtt_publish", "a/b", false, why), "allow_mqtt permits publishes");
   check(!approve_mutation(mqtt_only, "write_file", "notes.md", false, why), "allow_mqtt does not permit writes");
 
+  // run_command: the allowlist is the gate for everyone; --allow-exec only decides whether
+  // the model (rather than the operator) may run an allowlisted name.
+  Policy exec_listed;
+  exec_listed.exec_allow.push_back("uptime");
+  check(!approve_mutation(exec_listed, "run_command", "uptime", false, why),
+        "an allowlisted command still needs --allow-exec for the model");
+  Policy exec_open = exec_listed;
+  exec_open.allow_exec = true;
+  check(approve_mutation(exec_open, "run_command", "uptime", false, why),
+        "--allow-exec permits an allowlisted command");
+  check(approve_mutation(exec_open, "run_command", "uptime", true, why),
+        "the operator may run an allowlisted command");
+  check(!exec_allowed(exec_listed, "uptime"), "exec_allowed needs the opt-in");
+  check(exec_allowed(exec_open, "uptime"), "exec_allowed accepts an allowlisted name");
+  check(!exec_allowed(exec_open, "reboot"), "exec_allowed refuses a name outside the list");
+  check(is_mutating_tool("run_command"), "run_command is classified as mutating");
+
   check(is_mutating_tool("write_file") && is_mutating_tool("mqtt_publish"), "mutating tools recognised");
   check(!is_mutating_tool("read_file") && !is_mutating_tool("rag_search"), "read-only tools not mutating");
 }
