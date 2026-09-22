@@ -53,8 +53,11 @@ assume is `/data/slim/{slim-agent,run,data,skills,docs}` - 700 KB plus whatever 
 The C++ client has **no config file**: flags and environment only, and **a flag beats the
 environment**. Its defaults are relative to the working directory (`--data-dir` defaults to
 `./slim/data`), which on the read-only root means turns are answered but never recorded - so
-always pass `--data-dir` explicitly. The full flag/environment/default table, the install
-commands and a wrapper script that holds the configuration are in `slim/README.md`.
+always pass `--data-dir` explicitly. The docs and skills directories follow the same
+CWD-relative rule (`./slim/docs`, `./slim/skills`): with the layout above, run from `/data`
+(or set `SLIM_DOCS_DIR` / `SLIM_SKILLS_DIR`) or `/rag` finds nothing. The full
+flag/environment/default table, the install commands and a wrapper script that holds the
+configuration are in `slim/README.md`.
 
 ## Using a model that runs on the T830 itself
 
@@ -90,6 +93,7 @@ numbers, and the caveats.
 | live model turn over the LAN | a streamed answer, then `--history 6` recalling the number from the earlier turn, then `--history 0` failing to - the negative control |
 | **model on the device itself** | `llama-server` on loopback + a 0.5B Q4: `PONG!` in 4 s, 12 tok/s prompt / 7.9 tok/s generation, `/history` replaying those turns, and `--fallback-url` answering through a dead primary |
 | session store | `sessions/<name>.jsonl`, mode `0600`, one JSON object per line |
+| RAG corpus, no rebuild | markdown dropped into `docs/` and `skills/` is searched live: `/rag mt753x`, the multi-word `/rag probe -22`, `/rag HotSpotFlag` and `/rag OWE` each returned the right file first (2026-09-22) |
 | failing model (HTTP 400) | reports `HTTP status 400: <server message>` and writes no session file |
 
 A rebuild of this tree reproduces that exact artifact, so compare the sha256 before deploying.
