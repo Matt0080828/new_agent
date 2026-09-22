@@ -50,7 +50,7 @@ make -C slim/cpp t830-static    # 715,048 bytes、NEEDED 0、已 strip；裝置�
 
 C++ client **沒有設定檔**：只有旗標與環境變數，而且**旗標贏過環境變數**。它的預設值是相對工作目錄
 的（`--data-dir` 預設 `./slim/data`），在唯讀的根目錄下執行會出現「有回答但不會留下紀錄」的情況 ——
-所以永遠明確帶上 `--data-dir`。完整的旗標／環境變數／預設值對照表、安裝指令，以及把設定集中在裡面
+所以永遠明確帶上 `--data-dir`。docs 與 skills 目錄也是同樣的「相對工作目錄」規則（`./slim/docs`、`./slim/skills`）：用上面的佈局時要從 `/data` 執行（或設 `SLIM_DOCS_DIR` / `SLIM_SKILLS_DIR`），否則 `/rag` 什麼都搜不到。完整的旗標／環境變數／預設值對照表、安裝指令，以及把設定集中在裡面
 的 wrapper 腳本，都在 `slim/README.md`。
 
 ## 使用跑在 T830 自己身上的模型
@@ -85,6 +85,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 | 走 LAN 的 live model 回合 | 串流回答；接著 `--history 6` 重播並答出前一回合的數字；`--history 0` 則答不出來 —— 負向對照 |
 | **模型跑在裝置自己身上** | loopback 上的 `llama-server` + 0.5B Q4：4 秒回 `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` 能重播那些回合，且 `--fallback-url` 在主端點壞掉時仍能作答 |
 | session 儲存 | `sessions/<name>.jsonl`、權限 `0600`、一行一個 JSON 物件 |
+| RAG 語料，不需重 build | 放進 `docs/` 與 `skills/` 的 markdown 會被即時搜到：`/rag mt753x`、多詞的 `/rag probe -22`、`/rag HotSpotFlag` 與 `/rag OWE` 都把對的檔案排在第一（2026-09-22） |
 | 模型失敗（HTTP 400） | 回報 `HTTP status 400: <伺服器訊息>`，且不寫入 session 檔 |
 
 重新建置這棵樹會產生與上面**完全相同**的 artifact，所以部署前請比對 sha256。完整的驗證表格、

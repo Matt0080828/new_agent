@@ -54,7 +54,9 @@ scripts y el manual es `/data/slim/{slim-agent,run,data,skills,docs}`: 700 KB m�
 El cliente C++ **no tiene archivo de configuración**: solo opciones y variables de entorno, y **una opción
 gana a la variable de entorno**. Sus valores por defecto son relativos al directorio de trabajo
 (`--data-dir` es `./slim/data`), así que ejecutarlo desde la raíz de solo lectura responde pero no registra
-nada; pasa siempre `--data-dir`. La tabla completa de opciones, variables y valores por defecto, los comandos
+nada; pasa siempre `--data-dir`. Los directorios docs y skills siguen la misma regla relativa al
+directorio de trabajo (`./slim/docs`, `./slim/skills`): con el layout de arriba, ejecuta desde `/data`
+(o define `SLIM_DOCS_DIR` / `SLIM_SKILLS_DIR`) o `/rag` no encuentra nada. La tabla completa de opciones, variables y valores por defecto, los comandos
 de instalación y un script envoltorio que guarda la configuración están en `slim/README.md`.
 
 ## Usar un modelo que se ejecuta en el propio T830
@@ -90,6 +92,7 @@ JSON fiable. Ambos pueden convivir por invocación, y `--fallback-url` da «prim
 | turno en vivo por la LAN | respuesta en streaming y después `--history 6` recordando el número del turno anterior; `--history 0` sin recordarlo — el control negativo |
 | **modelo en el propio dispositivo** | `llama-server` en loopback + un 0.5B Q4: `PONG!` en 4 s, 12 tok/s de prompt y 7,9 tok/s de generación, `/history` reproduciendo esos turnos y `--fallback-url` respondiendo con el endpoint principal caído |
 | almacén de sesiones | `sessions/<name>.jsonl`, modo `0600`, un objeto JSON por línea |
+| corpus RAG, sin reconstruir | los markdown colocados en `docs/` y `skills/` se buscan en vivo: `/rag mt753x`, la consulta de varias palabras `/rag probe -22`, `/rag HotSpotFlag` y `/rag OWE` devolvieron el archivo correcto primero (2026-09-22) |
 | modelo que falla (HTTP 400) | informa `HTTP status 400: <mensaje del servidor>` y no escribe archivo de sesión |
 
 Recompilar este árbol reproduce exactamente ese artefacto, así que compara el sha256 antes de desplegar.

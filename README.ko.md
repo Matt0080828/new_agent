@@ -53,6 +53,9 @@ make -C slim/cpp t830-static    # 715,048 bytes, NEEDED 0, strip 완료; 기기�
 C++ 클라이언트에는 **설정 파일이 없습니다**. 플래그와 환경 변수뿐이고, **플래그가 환경 변수보다
 우선합니다**. 기본값은 작업 디렉터리 기준 상대 경로이며(`--data-dir` 기본값 `./slim/data`), 읽기 전용
 루트에서 실행하면 "답변은 하지만 기록이 남지 않는" 상태가 됩니다. 따라서 `--data-dir`는 항상 명시하세요.
+docs와 skills 디렉터리도 작업 디렉터리 기준 상대 경로 규칙이 동일합니다(`./slim/docs`, `./slim/skills`):
+위의 구조를 쓰면 `/data`에서 실행하거나(`SLIM_DOCS_DIR` / `SLIM_SKILLS_DIR` 설정) 해야 하고, 그렇지
+않으면 `/rag`가 아무것도 찾지 못합니다.
 플래그/환경 변수/기본값 전체 표, 설치 명령, 설정을 모아 두는 wrapper 스크립트는 `slim/README.md`에
 있습니다.
 
@@ -89,6 +92,7 @@ server가 요구하는 것은 `libstdc++.so.6`, `libgcc_s.so.1`, musl `libc`뿐�
 | LAN 경유 live model 턴 | 스트림 답변, 이어서 `--history 6`이 이전 턴의 숫자를 재현, `--history 0`은 재현하지 못함 — 음성 대조 |
 | **모델이 기기 자체에서 도는 경우** | loopback의 `llama-server` + 0.5B Q4: 4초에 `PONG!`, prompt 12 tok/s, 생성 7.9 tok/s, `/history`가 그 턴들을 재생, 주 엔드포인트가 죽어도 `--fallback-url`이 응답 |
 | session 저장소 | `sessions/<name>.jsonl`, 모드 `0600`, 한 줄에 JSON 객체 하나 |
+| RAG 코퍼스, 재빌드 불필요 | `docs/`와 `skills/`에 넣은 markdown은 라이브로 검색됨: `/rag mt753x`, 다중 단어인 `/rag probe -22`, `/rag HotSpotFlag`, `/rag OWE` 모두 올바른 파일을 첫 번째로 반환 (2026-09-22) |
 | 모델 실패(HTTP 400) | `HTTP status 400: <서버 메시지>`를 보고하고 session 파일을 쓰지 않음 |
 
 이 트리를 다시 빌드하면 위와 **동일한** artifact가 나옵니다. 배포 전에 sha256을 비교하세요.

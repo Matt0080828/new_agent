@@ -55,7 +55,9 @@ root 専用なので adb は特権コンテナ内で動き、コンテナはホ�
 C++ クライアントに**設定ファイルはありません**。フラグと環境変数のみで、**フラグが環境変数に
 優先します**。既定値は作業ディレクトリからの相対（`--data-dir` の既定は `./slim/data`）なので、
 読み取り専用のルートで実行すると「回答はするが記録が残らない」状態になります。したがって
-`--data-dir` は常に明示してください。フラグ／環境変数／既定値の一覧、インストール手順、設定を
+`--data-dir` は常に明示してください。docs と skills のディレクトリも同じ作業ディレクトリ相対の規則
+（`./slim/docs`、`./slim/skills`）です：上記のレイアウトなら `/data` から実行するか、
+`SLIM_DOCS_DIR` / `SLIM_SKILLS_DIR` を設定するか、さもないと `/rag` は何も見つけません。フラグ／環境変数／既定値の一覧、インストール手順、設定を
 まとめて持つ wrapper スクリプトは `slim/README.md` にあります。
 
 ## T830 自身で動くモデルを使う
@@ -92,6 +94,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 | LAN 経由の live model ターン | ストリーム回答、続いて `--history 6` が前のターンの数字を再現、`--history 0` では再現できない —— 負のコントロール |
 | **モデルが端末自身で動く場合** | loopback の `llama-server` + 0.5B Q4：4 秒で `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` がそれらのターンを再生、主エンドポイントが落ちても `--fallback-url` が回答 |
 | session ストア | `sessions/<name>.jsonl`、モード `0600`、1 行 1 JSON オブジェクト |
+| RAG コーパス、再ビルド不要 | `docs/` と `skills/` に置いた markdown はそのまま検索対象になる: `/rag mt753x`、複数語の `/rag probe -22`、`/rag HotSpotFlag`、`/rag OWE` いずれも正しいファイルを先頭で返した（2026-09-22） |
 | モデル失敗（HTTP 400） | `HTTP status 400: <サーバーのメッセージ>` を報告し、session ファイルを書きません |
 
 このツリーを再ビルドすると上記と**同一の** artifact が得られます。配備前に sha256 を照合して
