@@ -188,7 +188,7 @@ The C++ client prints the budget summary and the manifest per turn too, and its
 
 ## Tests
 
-All seven files together are **97 tests**; the one-shot form is
+All seven files together are **103 tests**; the one-shot form is
 `python3 -S -m unittest discover -s slim -p 'test_*.py'`.
 
 ```bash
@@ -213,7 +213,7 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 81 + 54 + 39 + 53 = 227 checks in four binaries
+make -C slim/cpp test        # 81 + 54 + 39 + 63 = 237 checks in four binaries
 ./slim/cpp/slim-agent --help
 ```
 

@@ -23,8 +23,8 @@ slim/README.md   詳細マニュアル：ビルド、配備、インストール
 ## ホストでのビルドとテスト
 
 ```bash
-cd slim/cpp && make && make test                              # 81 + 54 + 39 + 53 = 227 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 97 tests、標準ライブラリのみ
+cd slim/cpp && make && make test                              # 81 + 54 + 39 + 63 = 237 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 103 tests、標準ライブラリのみ
 ```
 
 ## CPE 向けビルド

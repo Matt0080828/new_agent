@@ -18,13 +18,14 @@ slim/            Python client: policy, session store, tools, RAG, tests
 slim/cpp/        C++ client with the same features, plus four test binaries
 slim/deploy/     run-on-t830.sh and on-device-smoke.sh - the deployment path
 slim/README.md   the manual: build, deploy, install, configure, model on the device
+BOARD_COMPATIBILITY.md  which development boards run it, and where the model has to live
 ```
 
 ## Build and test on the host
 
 ```bash
-cd slim/cpp && make && make test                              # 81 + 54 + 39 + 53 = 227 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 97 tests, standard library only
+cd slim/cpp && make && make test                              # 81 + 54 + 39 + 63 = 237 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 103 tests, standard library only
 ```
 
 ## Build for the CPE

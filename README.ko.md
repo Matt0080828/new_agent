@@ -22,8 +22,8 @@ slim/README.md   전체 매뉴얼: 빌드, 배포, 설치, 설정, 기기에서�
 ## 호스트에서 빌드와 테스트
 
 ```bash
-cd slim/cpp && make && make test                              # 81 + 54 + 39 + 53 = 227 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 97 tests, 표준 라이브러리만 사용
+cd slim/cpp && make && make test                              # 81 + 54 + 39 + 63 = 237 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 103 tests, 표준 라이브러리만 사용
 ```
 
 ## CPE용 빌드
