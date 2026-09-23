@@ -78,9 +78,10 @@ Qué cabe: el CPE tiene 1,7 GB de RAM y `Qwen2.5-0.5B-Instruct-Q4_K_M` (469 MB, 
 con 646 MB de RSS y aún ~1,1 GB libres; mucho más allá de 1B no entra. El servidor compilado de forma
 cruzada solo necesita `libstdc++.so.6`, `libgcc_s.so.1` y la `libc` de musl, presentes en la imagen. Con
 `-t 4` un turno corto tarda ~4 s y el servidor informó 12 tok/s de prompt eval y 7,9 tok/s de generación.
-Un modelo de este tamaño no es el 7B que puedes servir desde la LAN: espera respuestas más flojas y
-dirígelo con los comandos de barra (`/rag`, `/read`, `/write`, `/mqtt`, `/history`), porque no emite tool
-JSON fiable. Ambos pueden convivir por invocación, y `--fallback-url` da «primero local, LAN como escape».
+Un modelo de este tamaño no es el 7B que puedes servir desde la LAN: espera respuestas más flojas.
+Puede emitir el formato tool JSON (el prompt lo muestra), pero menos fiablemente, así que los
+comandos de barra (`/rag`, `/read`, `/write`, `/mqtt`, `/history`) siguen siendo la forma
+determinista de dirigir acciones. Ambos pueden convivir por invocación, y `--fallback-url` da «primero local, LAN como escape».
 `slim/README.md` tiene los comandos de copia, las cifras medidas y las advertencias.
 
 ## Verificado en hardware real

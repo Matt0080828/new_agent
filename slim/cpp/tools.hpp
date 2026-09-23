@@ -81,4 +81,9 @@ std::string run_tool(const ToolEnv& env, const std::string& name, const std::str
 // True when the tool name is one the tool layer implements.
 bool known_tool(const std::string& name);
 
+// True when text carries a tool call the tool layer can run: the outermost brace span
+// is one JSON object with a "tool" name this layer implements. Mirrors the Python
+// client's parse_tool_call, so both clients accept the same model output.
+bool parse_tool_call(const std::string& text, std::string& name, std::string& json_obj);
+
 #endif

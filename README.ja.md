@@ -80,8 +80,9 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 クロスビルドした server が必要とするのは `libstdc++.so.6`、`libgcc_s.so.1`、musl `libc` だけで、
 いずれもイメージに入っています。`-t 4` で短いターンは約 4 秒、server の自己申告は prompt eval
 12 tok/s、生成 7.9 tok/s でした。この大きさのモデルは LAN で動かせる 7B とは別物です。回答は
-弱くなりますし、動かすのはスラッシュコマンド（`/rag`、`/read`、`/write`、`/mqtt`、`/history`）
-にしてください —— 実用的な tool JSON は安定して出しません。呼び出しごとに両者を使い分けられ、
+弱くなります。prompt に示した tool JSON 形式は吐けますが不安定なので、アクションを確実に
+駆動するのはスラッシュコマンド（`/rag`、`/read`、`/write`、`/mqtt`、`/history`）です。
+呼び出しごとに両者を使い分けられ、
 `--fallback-url` を使えば「ローカル優先・LAN を保険に」できます。push 手順、実測値、注意点は
 `slim/README.md` にあります。
 

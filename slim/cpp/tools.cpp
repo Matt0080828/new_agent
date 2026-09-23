@@ -126,6 +126,19 @@ bool known_tool(const std::string& name) {
          name == "mqtt_publish" || name == "run_command";
 }
 
+bool parse_tool_call(const std::string& text, std::string& name, std::string& json_obj) {
+  size_t start = text.find('{');
+  if (start == std::string::npos)
+    return false;
+  size_t end = text.rfind('}');
+  if (end <= start)
+    return false;
+  json_obj = text.substr(start, end - start + 1);
+  if (!json_extract_string(json_obj, "tool", name))
+    return false;
+  return known_tool(name);
+}
+
 std::string run_tool(const ToolEnv& env, const std::string& name, const std::string& obj,
                      bool human_initiated, ToolBudget* budget, ChangeQueue* queue) {
   std::string result;

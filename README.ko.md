@@ -78,8 +78,9 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 로드 후 RSS 646 MB, 약 1.1 GB가 남았습니다 — 1B를 크게 넘으면 들어가지 않습니다. 크로스 빌드한
 server가 요구하는 것은 `libstdc++.so.6`, `libgcc_s.so.1`, musl `libc`뿐이며 모두 이미지에 있습니다.
 `-t 4`에서 짧은 턴은 약 4초였고, server가 보고한 수치는 prompt eval 12 tok/s, 생성 7.9 tok/s입니다.
-이 크기의 모델은 LAN에서 서비스하는 7B와 다릅니다. 답변이 약해지고, 쓸 만한 tool JSON을 안정적으로
-내지 않으므로 슬래시 명령(`/rag`, `/read`, `/write`, `/mqtt`, `/history`)으로 구동하세요. 호출마다
+이 크기의 모델은 LAN에서 서비스하는 7B와 다릅니다. 답변이 약해지고, prompt에 보이는 tool JSON
+형식을 내놓긴 하지만 불안정하므로, 액션을 확실하게 구동하려면 슬래시 명령(`/rag`, `/read`, `/write`,
+`/mqtt`, `/history`)입니다. 호출마다
 둘을 함께 쓸 수 있고, `--fallback-url`로 "로컬 우선, LAN은 비상용"으로 만들 수 있습니다. push 명령,
 실측 수치, 주의 사항은 `slim/README.md`에 있습니다.
 

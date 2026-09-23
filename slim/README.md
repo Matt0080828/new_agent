@@ -377,7 +377,7 @@ created `flagwins.jsonl`). Every setting it understands, with the real defaults 
 | Streaming | `--stream` | `SLIM_STREAM=1` | off |
 | Model may write files | `--allow-write` | `SLIM_ALLOW_WRITE=1` | off, denied |
 | Model may publish | `--allow-mqtt` | `SLIM_ALLOW_MQTT=1` | off, denied |
-| Model may run commands | `--allow-exec` | `SLIM_ALLOW_EXEC=1` | off, denied; an allowlisted bare name in `<data-dir>/commands.allow` is required as well |
+| Model may run commands | `--no-allow-exec` (off) | `SLIM_ALLOW_EXEC=0` | **on by default**; an allowlisted bare name in `<data-dir>/commands.allow` is required as well, and no shell is involved |
 | Approval prompt | `--non-interactive` / `--interactive` | - | on only when stdin is a tty, otherwise deny |
 | Stage writes, write nothing | `--dry-run-writes` | `SLIM_DRY_RUN_WRITES=1` | off |
 | Retry budget | `--attempts`, `--retry-base-ms` | `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS` | `3`, `500` ms |
@@ -465,8 +465,9 @@ answer takes ~4 s; `n_ctx_slot` was 2048 as requested. It also works through the
 the install section - change its `BASE` to `http://127.0.0.1:8080/v1` and nothing else.
 
 Two things to expect from a model this size: answers are weaker than the 7B on the LAN, and it
-will not emit reliable tool JSON, so drive it with the slash commands (`/rag`, `/read`,
-`/write`, `/mqtt`, `/history`) - `--max-tokens` defaults to 64 for exactly that reason. Keep
+is less reliable at emitting the tool JSON format (the prompt shows one-line examples), so the
+slash commands (`/rag`, `/read`, `/write`, `/mqtt`, `/history`) remain the deterministic way to
+drive actions - `--max-tokens` defaults to 64 for exactly that reason. Keep
 the LAN endpoint when the answer quality matters.
 
 Both can coexist, since the endpoint is per invocation. For local-first with a LAN escape
@@ -518,7 +519,7 @@ Verified on the device (static build, sha256-matched):
 | `--dry-run-writes` | prints the manifest and writes nothing |
 | `sessions/...`, `*.sqlite`, `../escape` writes | all refused, with the expected wording |
 | `/run df -h` (allowlisted) | exit 0 with the real table; `ls` refused (not allowlisted), `/bin/ls` refused (a path) |
-| a model asked to run a command | describes it and executes nothing - the C++ client has no tool-call path |
+| a model asked to run a command | model-initiated execution now exists in both clients: an allowlisted name runs (no shell), anything else is refused - re-verify on the CPE after the next build |
 | unreachable model endpoint | 3 attempts, then fails: bounded retry, no loop |
 
 Device facts measured on the box: OpenWrt 23.05.5, kernel 5.15.167,
@@ -531,12 +532,13 @@ Flags accepted by the C++ client (its `--help` prints a shorter summary): `--bas
 `--fallback-url`, `--model`, `--fallback-model`, `--api-key`, `--data-dir`, `--skills-dir`,
 `--docs-dir`, `--mqtt-http`, `--max-tokens`, `--attempts`, `--retry-base-ms`,
 `--http-verbose`, `--stream`, `--dry-run-writes`, `--session`, `--history`, `--allow-write`,
-`--allow-mqtt`, `--non-interactive` / `--interactive`, `--once`, `--ingest-only`, `--help`.
+`--allow-mqtt`, `--allow-exec` / `--no-allow-exec`, `--non-interactive` / `--interactive`,
+`--once`, `--ingest-only`, `--help`.
 The Python client's `--help` lists its full set, which is the same plus `--config`, `--db`,
-`--timeout`, `--show-history`. The 270M-class local model does not
-emit usable tool JSON, so tools are reached through the `/rag`, `/read`, `/write`, `/mqtt`,
-`/history`, `/help` slash commands rather than model tool calls; RAG is a keyword scan of
-`.md`/`.txt` (no SQLite in the C++ client).
+`--timeout`, `--show-history`. A model that emits the tool JSON (the prompt shows the format)
+gets the tools directly; a 270M-class local model does not do it reliably, so the `/rag`,
+`/read`, `/write`, `/mqtt`, `/run`, `/history`, `/help` slash commands remain the
+deterministic path. RAG is a keyword scan of `.md`/`.txt` (no SQLite in the C++ client).
 
 **Verified on the device: a live model turn.** With the host PC on the CPE's LAN
 (`br-lan 192.168.1.0/24`), LM Studio on the host is reachable from the CPE and both builds
@@ -565,7 +567,7 @@ longer one, change that constant and rebuild; the Python client has the knob as
 
 Gateway, dashboard, Honcho, embeddings, MCP, arbitrary shell, full Hermes skills, 3B local models.
 
-### Running a command on the device: opt-in, allowlisted, shell-free
+### Running a command on the device: allowlisted, shell-free, model-initiated by default
 
 The tool layer has a fifth tool, `run_command`, and it is the one that changes the machine, so
 it has three gates that all have to open:
@@ -577,9 +579,9 @@ it has three gates that all have to open:
 2. **The name has to be bare** - no `/`, no `.`/`..`. A path is refused even when its last
    component is allowlisted, so nothing can point the runner at a binary written into the data
    directory.
-3. **The model needs its own opt-in** - `--allow-exec` / `SLIM_ALLOW_EXEC=1`, on top of the
-   allowlist, before a model-initiated call runs. With a terminal attached an unapproved call
-   prompts `[y/N]`; without one it is denied.
+3. **The model side is on by default** - a model-initiated call runs as soon as the name is
+   allowlisted. `--no-allow-exec` / `SLIM_ALLOW_EXEC=0` turns it off; with a terminal attached
+   a call the gate does not cover prompts `[y/N]`, and without one it is denied.
 
 **There is no shell anywhere in the path.** The command is `execv`'d with an argv array, and the
 model-supplied argument string is split on whitespace, so `;`, `|`, `$(...)` and backticks are
@@ -600,11 +602,12 @@ $ ./slim-agent ... --allow-write --once '/write commands.allow reboot'
                                              -> it is a permission file (the command allowlist)
 ```
 
-Two things worth knowing about who can pull the trigger. The **C++ client has no model tool-call
-path at all** - it never parses a tool request out of a reply - so on the CPE `/run` is driven by
-the operator (or by a script feeding the resident stdin loop), and a model asked to run something
-can only describe it. The Python client does let the model call tools, so there `--allow-exec`
-plus the allowlist is what stands between a poisoned markdown file and a command. And `/read` is
+Two things worth knowing about who can pull the trigger. **Both clients give the model a
+tool-call path** - the C++ client parses a tool request out of a reply and runs it in one
+bounded round through the same gates - so a model asked to run something stands behind the
+allowlist (and `--no-allow-exec`, when it has been turned off), and nothing else. That is the
+exposure a poisoned markdown file has: it can trigger allowlisted commands, with no shell,
+and it cannot widen the list. The operator's `/run` obeys the same allowlist. And `/read` is
 jailed to `--data-dir` while `/rag` searches `--skills-dir`/`--docs-dir`, so corpus files are
 searchable but not readable as files unless they live inside the data directory.
 

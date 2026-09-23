@@ -117,9 +117,9 @@ static std::string chat_fallback(const Cfg& cfg, const std::vector<std::pair<std
   }
 }
 
-// History trimming used to live here. It became unreachable when model tool
-// calls were dropped (every turn is now a single user message), so the size
-// guard moved to cap_prompt() in util.cpp, where it has a unit test.
+// Model tool calls exist again, but a turn still runs at most one tool round, so there is
+// nothing to trim between rounds; the size guard lives in cap_prompt() (util.cpp), which
+// has a unit test.
 struct Hit {
   std::string path;
   std::string snippet;
@@ -317,8 +317,8 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
     return run_tool(tool_env_from(cfg), "mqtt_publish", js.str(), true, 0, 0);
   }
   if (cmd == "/run") {
-    // The operator (or a script) asked for this, so the gate is the allowlist; if
-    // a model ever gets a tool-call path, approve_mutation() gates it as well.
+    // The operator (or a script) asked for this, so the gate is the allowlist; the
+    // model's tool path goes through the same run_tool() gates with human=false.
     std::string name, rest_args;
     name = first_word(rest, rest_args);
     std::ostringstream js;
@@ -353,9 +353,53 @@ static std::string run_turn(const Cfg& cfg, const std::string& user) {
     msgs.push_back(std::make_pair(history[i].role == "assistant" ? std::string("assistant")
                                                                 : std::string("user"),
                                   history[i].text));
+  // Tell the model the tool contract up front; a weak model needs the format in the
+  // prompt to emit it. Same JSON examples as the Python client's TOOLS block. Slash
+  // commands keep working exactly as before.
+  const std::string tool_hint =
+      "Tools (reply with ONE JSON object, nothing else, only when you need one): "
+      "{\"tool\":\"rag_search\",\"query\":\"keywords\"} "
+      "{\"tool\":\"read_file\",\"path\":\"relative.md\"} "
+      "{\"tool\":\"write_file\",\"path\":\"note.txt\",\"content\":\"...\"} "
+      "{\"tool\":\"mqtt_publish\",\"topic\":\"a/b\",\"payload\":\"hi\"} "
+      "{\"tool\":\"run_command\",\"command\":\"uptime\",\"args\":\"-s\"} "
+      "(run_command: the name must be in commands.allow; never a shell)\n"
+      "After a tool result, answer in plain text.\n";
   msgs.push_back(std::make_pair(std::string("user"),
-                                std::string("Q: ") + cap_prompt(u, kMaxPrompt) + "\nA:"));
+                                tool_hint + "Q: " + cap_prompt(u, kMaxPrompt) + "\nA:"));
   std::string reply = chat_fallback(cfg, msgs);
+  // One bounded tool round: if the model answered with a tool call, run it as a
+  // model-initiated call - every gate applies (policy flags, the allowlist, the
+  // protected paths, the write jail) - then let the model finish the answer.
+  // A tool call in the final reply is never executed, same as the Python client.
+  std::string tool_name, tool_json;
+  if (parse_tool_call(reply, tool_name, tool_json)) {
+    ToolEnv env = tool_env_from(cfg);
+    ToolBudget budget;
+    ChangeQueue queue;
+    std::string result = run_tool(env, tool_name, tool_json, /*human_initiated=*/false,
+                                  &budget, &queue);
+    std::string applied;
+    if (!queue.entries.empty()) {
+      if (cfg.dry_run_writes) {
+        applied = "dry run: " + queue.summary() + "; nothing written";
+      } else {
+        std::vector<std::string> failures;
+        std::vector<std::string> wrote = queue.apply(failures);
+        applied = queue.summary() + " (" + std::to_string(wrote.size()) + " written)";
+        for (size_t i = 0; i < failures.size(); ++i)
+          applied += "\n" + failures[i];
+      }
+    }
+    std::ostringstream follow;
+    follow << "tool " << tool_name << " result:\n" << result;
+    if (!applied.empty())
+      follow << "\n" << applied;
+    msgs.push_back(std::make_pair(std::string("assistant"), reply));
+    msgs.push_back(std::make_pair(std::string("user"),
+                                  follow.str() + "\nAnswer in plain text. A:"));
+    reply = chat_fallback(cfg, msgs);
+  }
   record_turn(cfg, "user", u);
   record_turn(cfg, "assistant", reply);
   if (cfg.stream)
@@ -373,7 +417,7 @@ static void print_reply(const Cfg& cfg, const std::string& out, bool slash_comma
 }
 
 static void usage() {
-  std::cerr << "slim-agent (C++ t830-slim). 270M cannot do tool JSON; use slash commands.\n"
+  std::cerr << "slim-agent (C++ t830-slim). Model tool calls are gated; slash commands still work.\n"
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
             << "  /run CMD [ARGS] runs an allowlisted command (no shell; see below)\n"
@@ -386,9 +430,10 @@ static void usage() {
             << "          --allow-write / --allow-mqtt (or SLIM_ALLOW_WRITE=1 / SLIM_ALLOW_MQTT=1)\n"
             << "          state files (*.sqlite, *.db, dotfiles) are never writable\n"
             << "          --non-interactive turns off the approval prompt (deny by default)\n"
-            << "  exec: --allow-exec (or SLIM_ALLOW_EXEC=1) lets the model run commands, "
-               "and only the bare names in <data-dir>/commands.allow; that file is not\n"
-            << "        writable through a tool, and no shell is used - args go as-is\n"
+            << "  exec: model-initiated commands are on by default, but only the bare names in\n"
+            << "        <data-dir>/commands.allow may run (no shell - args go as-is; 10 s,\n"
+            << "        16 KiB cap). --no-allow-exec or SLIM_ALLOW_EXEC=0 disables it; that file\n"
+            << "        is not writable through a tool, so the model cannot widen its own list\n"
             << "env: SLIM_BASE_URL SLIM_FALLBACK_URL SLIM_MODEL SLIM_FALLBACK_MODEL\n"
             << "     SLIM_API_KEY SLIM_DATA_DIR SLIM_SKILLS_DIR SLIM_DOCS_DIR SLIM_MQTT_HTTP\n"
             << "     SLIM_ALLOW_WRITE SLIM_ALLOW_MQTT SLIM_ALLOW_EXEC\n";
@@ -414,6 +459,10 @@ int main(int argc, char** argv) {
   cfg.mqtt_http = env_or("SLIM_MQTT_HTTP", "");
   cfg.policy.allow_write = env_or("SLIM_ALLOW_WRITE", "") == "1";
   cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
+  // Model-initiated execution is on by default; the scope is still only the bare names in
+  // <data-dir>/commands.allow (no file, nothing runs). SLIM_ALLOW_EXEC=0 or --no-allow-exec
+  // turns it off.
+  cfg.policy.allow_exec = env_or("SLIM_ALLOW_EXEC", "1") != "0";
   cfg.policy.interactive = isatty(0) != 0;
   cfg.stream = env_or("SLIM_STREAM", "") == "1";
   cfg.dry_run_writes = env_or("SLIM_DRY_RUN_WRITES", "") == "1";
@@ -490,6 +539,8 @@ int main(int argc, char** argv) {
       cfg.policy.allow_mqtt = true;
       else if (a == "--allow-exec")
         cfg.policy.allow_exec = true;
+    else if (a == "--no-allow-exec")
+      cfg.policy.allow_exec = false;
     else if (a == "--non-interactive")
       cfg.policy.interactive = false;
     else if (a == "--interactive")

@@ -72,8 +72,8 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 加载后占 646 MB RSS，还剩约 1.1 GB 可用 —— 超过 1B 左右就装不下了。交叉编译的 server 只需要
 `libstdc++.so.6`、`libgcc_s.so.1` 与 musl `libc`，这些镜像里都有。用 `-t 4` 时一个短回合约
 4 秒，server 自报 prompt eval 12 tok/s、生成 7.9 tok/s。这个尺寸的模型不是你可以从 LAN 服务的
-7B：答案会弱一些，而且请用斜线命令驱动它（`/rag`、`/read`、`/write`、`/mqtt`、`/history`）——
-它不会稳定输出可用的 tool JSON。两者可以按每次调用并存，`--fallback-url` 还能做出
+7B：答案会弱一些；它能输出 prompt 里展示的 tool JSON 格式，但不稳定，所以驱动动作要用斜线命令
+（`/rag`、`/read`、`/write`、`/mqtt`、`/history`）才靠得住。两者可以按每次调用并存，`--fallback-url` 还能做出
 「本地优先、LAN 备援」。`slim/README.md` 有推送命令、实测数字与注意事项。
 
 ## 在真实硬件上验证过的项目

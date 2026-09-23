@@ -378,6 +378,27 @@ static void test_run_command() {
   check(why.find("permission file") != std::string::npos, "and the reason says why");
 }
 
+// --- parse_tool_call: the model's tool JSON, same shape as the Python client ---
+
+static void test_parse_tool_call() {
+  std::string name, obj;
+  check(!parse_tool_call("just a plain answer, no tools", name, obj),
+        "prose without braces is not a tool call");
+  check(!parse_tool_call("an open brace only {", name, obj), "an unmatched brace is not a call");
+  check(!parse_tool_call("{\"tool\":\"fork_bomb\"}", name, obj),
+        "a tool the layer does not implement is refused");
+  check(!parse_tool_call("{\"tool\":\"uptime\"}", name, obj),
+        "a tool field naming a command, not a tool, is refused");
+  check(!parse_tool_call("{\"query\":\"wifi\"}", name, obj), "an object without a tool field is not a call");
+  check(parse_tool_call("{\"tool\":\"run_command\",\"command\":\"uptime\"}", name, obj),
+        "a bare tool object is recognised");
+  check(name == "run_command", "and the tool name comes back");
+  check(obj == "{\"tool\":\"run_command\",\"command\":\"uptime\"}", "the object passes through intact");
+  check(parse_tool_call("sure, here you go: {\"tool\":\"rag_search\",\"query\":\"wifi\"}", name, obj),
+        "a tool object inside prose is recognised");
+  check(name == "rag_search", "with the right name");
+}
+
 int main() {
   char tmpl[] = "/tmp/slim-tools-test-XXXXXX";
   char* dir = mkdtemp(tmpl);
@@ -395,6 +416,7 @@ int main() {
   test_tool_budget();
   test_mqtt();
   test_run_command();
+  test_parse_tool_call();
   std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   if (g_failures) {
     std::cout << g_failures << " FAILED\n";

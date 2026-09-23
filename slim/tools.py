@@ -122,7 +122,7 @@ TOOLS = (
     "read_file: {\"tool\":\"read_file\",\"path\":\"relative.md\"}",
     "write_file: {\"tool\":\"write_file\",\"path\":\"note.txt\",\"content\":\"...\"}",
     "mqtt_publish: {\"tool\":\"mqtt_publish\",\"topic\":\"a/b\",\"payload\":\"hi\"}  (needs SLIM_MQTT_HTTP)",
-    "run_command: {\"tool\":\"run_command\",\"command\":\"uptime\",\"args\":\"-s\"}  (needs --allow-exec and a name in commands.allow)",
+    "run_command: {\"tool\":\"run_command\",\"command\":\"uptime\",\"args\":\"-s\"}  (the name must be in <data-dir>/commands.allow; --no-allow-exec disables it)",
 )
 
 

@@ -310,7 +310,10 @@ def _parse_args(argv):
                    default=os.environ.get("SLIM_ALLOW_WRITE", "") == "1",
                    help="allow model-initiated write_file (default: denied)")
     p.add_argument("--allow-exec", action="store_true",
-                   help="let the model run commands (only bare names in <data-dir>/commands.allow)")
+                   default=None,
+                   help="let the model run commands (on by default; only bare names in <data-dir>/commands.allow)")
+    p.add_argument("--no-allow-exec", action="store_true",
+                   help="deny model-initiated run_command (it is on by default)")
     p.add_argument("--allow-mqtt", action="store_true",
                    default=os.environ.get("SLIM_ALLOW_MQTT", "") == "1",
                    help="allow model-initiated mqtt_publish (default: denied)")
@@ -345,6 +348,18 @@ def build_cfg(args):
         return file_cfg.get(key) or ""
 
     data_dir = pick("data_dir", args.data_dir)
+    # Model-initiated execution is on by default; its scope is still only the bare names
+    # in <data-dir>/commands.allow. Precedence: explicit flag > config file > SLIM_ALLOW_EXEC
+    # (0/1) > on.
+    if args.no_allow_exec:
+        allow_exec = False
+    elif args.allow_exec:
+        allow_exec = True
+    elif file_cfg.get("allow_exec") is not None:
+        allow_exec = bool(file_cfg["allow_exec"])
+    else:
+        env_exec = os.environ.get("SLIM_ALLOW_EXEC", "")
+        allow_exec = (env_exec == "1") if env_exec in ("0", "1") else True
     cfg = {
         "base_url": pick("base_url", args.base_url),
         "fallback_url": pick("fallback_url", args.fallback_url),
@@ -361,7 +376,7 @@ def build_cfg(args):
         "policy": {
             "allow_write": bool(args.allow_write or file_cfg.get("allow_write")),
             "allow_mqtt": bool(args.allow_mqtt or file_cfg.get("allow_mqtt")),
-            "allow_exec": bool(args.allow_exec or file_cfg.get("allow_exec")),
+            "allow_exec": allow_exec,
             # Read once, from the data directory. protected_path() keeps a tool from
             # writing it, so the model cannot grant itself a command; no file means
             # nothing may run.

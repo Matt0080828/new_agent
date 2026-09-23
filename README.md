@@ -78,9 +78,10 @@ What fits: the CPE has 1.7 GB RAM, and `Qwen2.5-0.5B-Instruct-Q4_K_M` (469 MB, p
 loaded with 646 MB RSS and ~1.1 GB still free - much past 1B will not fit. The cross-built
 server needs only `libstdc++.so.6`, `libgcc_s.so.1` and musl `libc`, all present in the image.
 With `-t 4` a short turn takes ~4 s and the server reports 12 tok/s prompt eval and 7.9 tok/s
-generation. A model this size is not the 7B you can serve from the LAN: expect weaker answers,
-and drive it with the slash commands (`/rag`, `/read`, `/write`, `/mqtt`, `/history`) - it does
-not emit reliable tool JSON. Both can coexist per invocation, and `--fallback-url` gives
+generation. A model this size is not the 7B you can serve from the LAN: expect weaker answers. It can
+emit the tool JSON format (the prompt shows it), but less reliably, so the slash commands
+(`/rag`, `/read`, `/write`, `/mqtt`, `/history`) stay the deterministic way to drive actions.
+Both can coexist per invocation, and `--fallback-url` gives
 local-first with a LAN escape hatch. `slim/README.md` has the staging commands, the measured
 numbers, and the caveats.
 

@@ -26,10 +26,11 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", "0"))
-        self.rfile.read(n)
+        raw_req = self.rfile.read(n)
+        self.server.last_body = raw_req
         self.server.n += 1
         if self.server.n == 1 and self.server.tool_first:
-            content = '{"tool":"rag_search","query":"OpenWrt"}'
+            content = self.server.tool_json
         else:
             content = "pong"
         payload = {"choices": [{"message": {"role": "assistant", "content": content}}]}
@@ -46,6 +47,8 @@ class SlimAgentTests(unittest.TestCase):
         self.httpd = HTTPServer(("127.0.0.1", 0), _Handler)
         self.httpd.n = 0
         self.httpd.tool_first = False
+        self.httpd.tool_json = '{"tool":"rag_search","query":"OpenWrt"}'
+        self.httpd.last_body = b""
         self.thread = threading.Thread(target=self.httpd.serve_forever)
         self.thread.daemon = True
         self.thread.start()
@@ -71,6 +74,38 @@ class SlimAgentTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as ctx:
             agent.main(["--model", "tiny", "--data-dir", self.td])
         self.assertEqual(ctx.exception.code, 2)
+
+    def test_allow_exec_on_by_default(self):
+        args = agent._parse_args(["--data-dir", self.td])
+        self.assertTrue(agent.build_cfg(args)["policy"]["allow_exec"], "model exec is on by default")
+
+    def test_no_allow_exec_denies(self):
+        args = agent._parse_args(["--no-allow-exec", "--data-dir", self.td])
+        self.assertFalse(agent.build_cfg(args)["policy"]["allow_exec"])
+
+    def test_allow_exec_config_and_flag_precedence(self):
+        cfg_path = os.path.join(self.td, "cfg.json")
+        with open(cfg_path, "w", encoding="utf-8") as fh:
+            json.dump({"allow_exec": False}, fh)
+        args = agent._parse_args(["--config", cfg_path, "--data-dir", self.td])
+        self.assertFalse(agent.build_cfg(args)["policy"]["allow_exec"], "the config file can turn it off")
+        args = agent._parse_args(["--config", cfg_path, "--allow-exec", "--data-dir", self.td])
+        self.assertTrue(agent.build_cfg(args)["policy"]["allow_exec"], "an explicit flag beats the config file")
+
+    def test_allow_exec_env_override(self):
+        old = os.environ.get("SLIM_ALLOW_EXEC")
+        try:
+            os.environ["SLIM_ALLOW_EXEC"] = "0"
+            args = agent._parse_args(["--data-dir", self.td])
+            self.assertFalse(agent.build_cfg(args)["policy"]["allow_exec"])
+            os.environ["SLIM_ALLOW_EXEC"] = "1"
+            args = agent._parse_args(["--data-dir", self.td])
+            self.assertTrue(agent.build_cfg(args)["policy"]["allow_exec"])
+        finally:
+            if old is None:
+                os.environ.pop("SLIM_ALLOW_EXEC", None)
+            else:
+                os.environ["SLIM_ALLOW_EXEC"] = old
 
     def test_tool_round(self):
         self.httpd.tool_first = True
@@ -99,6 +134,43 @@ class SlimAgentTests(unittest.TestCase):
         reply = agent.run_turn("what about OpenWrt", cfg, conn)
         self.assertEqual(reply, "pong")
         self.assertGreaterEqual(self.httpd.n, 2)
+        conn.close()
+
+    def test_model_run_command_allowed_by_default(self):
+        # Model-initiated execution is on by default: with the name in
+        # commands.allow the tool round runs the command and the model still
+        # answers in plain text.
+        self.httpd.tool_first = True
+        self.httpd.tool_json = '{"tool":"run_command","command":"uptime","args":""}'
+        with open(os.path.join(self.td, "commands.allow"), "w", encoding="utf-8") as fh:
+            fh.write("uptime\n")
+        args = agent._parse_args(["--base-url", self.url, "--model", "tiny",
+                                  "--data-dir", self.td, "--timeout", "5"])
+        cfg = agent.build_cfg(args)
+        import rag
+
+        conn = rag.connect(cfg["db"])
+        reply = agent.run_turn("check uptime", cfg, conn)
+        self.assertEqual(reply, "pong")
+        self.assertGreaterEqual(self.httpd.n, 2, "the tool result is fed back for the final answer")
+        self.assertIn(b"exit 0", self.httpd.last_body, "the second request carries the command's exit status")
+        conn.close()
+
+    def test_model_run_command_still_needs_the_allowlist(self):
+        # Default-on means model + policy gate; the allowlist is still the scope.
+        self.httpd.tool_first = True
+        self.httpd.tool_json = '{"tool":"run_command","command":"uptime","args":""}'
+        args = agent._parse_args(["--base-url", self.url, "--model", "tiny",
+                                  "--data-dir", self.td, "--timeout", "5"])
+        cfg = agent.build_cfg(args)
+        import rag
+
+        conn = rag.connect(cfg["db"])
+        reply = agent.run_turn("check uptime", cfg, conn)
+        self.assertEqual(reply, "pong")
+        self.assertGreaterEqual(self.httpd.n, 2)
+        self.assertIn(b"not in the command allowlist", self.httpd.last_body,
+                      "without commands.allow nothing runs, even with the default-on policy")
         conn.close()
 
     def test_chat_error_raises(self):
