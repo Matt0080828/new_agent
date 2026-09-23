@@ -34,4 +34,18 @@ bool session_append(const std::string& path, const std::string& role, const std:
 // A missing or unreadable file yields no turns (that is "a new session", not an error).
 std::vector<Turn> session_load(const std::string& path, int limit);
 
+// <data_dir>/sessions/*.jsonl as RAG corpus entries: ("session/<name>", first 64 KB).
+// Conversation history is searchable, not just replayed.
+void list_session_files(const std::string& data_dir,
+                        std::vector<std::pair<std::string, std::string> >& out);
+
+// Long-term memory: <data_dir>/memory.md, injected into every prompt. The operator
+// appends facts with /remember; a model with write_file may rewrite it. Kept small
+// on purpose - it is in every prompt.
+std::string memory_path(const std::string& data_dir);
+// Append one line (the given text, verbatim). False + why on failure.
+bool memory_append(const std::string& data_dir, const std::string& text, std::string& why);
+// Up to max_chars of it, "" when the file does not exist.
+std::string memory_load(const std::string& data_dir, size_t max_chars);
+
 #endif

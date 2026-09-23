@@ -174,6 +174,42 @@ static void test_line_shape_and_permissions() {
   check(stat(path.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600, "mode 0600");
 }
 
+static void test_memory_and_session_files() {
+  std::cout << "-- long-term memory and session files for RAG\n";
+  check(memory_path(g_dir) == g_dir + "/memory.md", "memory.md lives in the data dir");
+  check(memory_load(g_dir, 1600) == "", "no file means no memory, not an error");
+
+  std::string why;
+  check(!memory_append(g_dir, "", why) && !why.empty(), "an empty fact is refused");
+  check(memory_append(g_dir, "FACT: mesh needs MTU 1500", why), "first line");
+  check(memory_append(g_dir, "FACT: band 6 uses rax1", why), "second line");
+  std::string m = memory_load(g_dir, 1600);
+  check(m.find("FACT: mesh needs MTU 1500\n") != std::string::npos, "both lines are there");
+  check(m.find("band 6") != std::string::npos, "second fact in append order");
+  std::string big(5000, 'y');
+  check(memory_append(g_dir, big, why), "a long line");
+  check(memory_load(g_dir, 100).size() == 100, "memory_load caps at max_chars");
+
+  // Sessions are RAG corpus entries; other files in the directory are not.
+  append_raw(session_path(g_dir, "chat"), "{\"ts\":\"t\",\"role\":\"user\",\"text\":\"mesh down\"}\n");
+  append_raw(g_dir + "/sessions/notes.md", "not a session\n");
+  std::vector<std::pair<std::string, std::string> > entries;
+  list_session_files(g_dir, entries);
+  bool found_chat = false, found_md = false;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    if (entries[i].first == "session/chat.jsonl")
+      found_chat = true;
+    if (entries[i].first == "session/notes.md")
+      found_md = true;
+  }
+  check(found_chat, "the .jsonl session is listed, with a session/ prefix");
+  check(!found_md, "a non-jsonl file in sessions/ is not listed");
+  for (size_t i = 0; i < entries.size(); ++i) {
+    if (entries[i].first == "session/chat.jsonl")
+      check(entries[i].second.find("mesh down") != std::string::npos, "and its content is carried");
+  }
+}
+
 int main() {
   char tmpl[] = "/tmp/slim-session-test-XXXXXX";
   char* dir = mkdtemp(tmpl);
@@ -189,6 +225,7 @@ int main() {
   test_limits_and_missing();
   test_tolerant_reader();
   test_line_shape_and_permissions();
+  test_memory_and_session_files();
   std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   if (g_failures) {
     std::cout << g_failures << " FAILED\n";

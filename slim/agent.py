@@ -193,7 +193,7 @@ def _trim(messages):
     return out
 
 
-def system_prompt(skill_text):
+def system_prompt(skill_text, memory_text=""):
     lines = [
         "You are a small CPE agent. Answer briefly.",
         "Context window is about 2048 tokens. Do not claim Hermes compatibility.",
@@ -203,6 +203,12 @@ def system_prompt(skill_text):
     lines.append("After a tool result, answer in plain text. Never execute shell.")
     if skill_text:
         lines.append(skill_text)
+    if memory_text:
+        # Same file the C++ client injects and appends to via /remember.
+        lines.append("Long-term memory (facts that survive sessions; to remember a new "
+                     "fact, read_file memory.md then write_file it with the old lines plus "
+                     "the new one):")
+        lines.append(memory_text)
     return "\n".join(lines)
 
 
@@ -211,7 +217,8 @@ def run_turn(user_text, cfg, conn):
     streaming = bool(cfg.get("stream"))
     emit = _stream_to_stdout() if streaming else None
     skills = load_skills(cfg["skills_dir"])
-    messages = [{"role": "system", "content": system_prompt(format_skills(skills))}]
+    memory_text = _load_memory(cfg["data_dir"])
+    messages = [{"role": "system", "content": system_prompt(format_skills(skills), memory_text)}]
     # Replay the stored session first: that is what makes it resumable rather than a
     # log nobody reads.
     for turn in session_load(cfg.get("session_file", ""), cfg.get("history", 0)):
@@ -289,6 +296,18 @@ def _load_config(path):
         with open(path, "r", encoding="utf-8") as fh:
             cfg = json.load(fh)
     return cfg
+
+
+def _load_memory(data_dir, max_chars=1600):
+    # memory.md is the small set of facts that survive sessions, injected into every
+    # prompt (same file the C++ client's /remember appends to). Bounded: it costs a
+    # fixed slice of a ~2048-token context on every turn.
+    path = os.path.join(data_dir, "memory.md")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read(max_chars)
+    except OSError:
+        return ""
 
 
 def _parse_args(argv):

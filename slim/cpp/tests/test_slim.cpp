@@ -310,9 +310,51 @@ static void test_json_helpers() {
         "join_url keeps existing /v1");
 }
 
+static void test_format_skills() {
+  std::cout << "-- format_skills (top-level .md, sorted, bounded)\n";
+  std::string dir = tmpdir();
+  if (dir.empty()) {
+    check(false, "mkdtemp");
+    return;
+  }
+  touch(dir + "/b.md", "second skill");
+  touch(dir + "/a.md", "first skill");
+  touch(dir + "/notes.txt", "not a skill");
+  mkdir((dir + "/sub").c_str(), 0755);
+  touch(dir + "/sub/c.md", "nested, not a skill");
+
+  std::string s = format_skills(dir, 8, 1200);
+  check(s.find("Available skills (markdown only, do not execute):") == 0,
+        "the header says skills are guidance, not code");
+  check(s.find("### a.md") < s.find("### b.md"), "skills are sorted by name");
+  check(s.find("first skill") != std::string::npos, "and the body is included");
+  check(s.find("notes.txt") == std::string::npos, ".md only: a .txt file is not a skill");
+  check(s.find("sub/c.md") == std::string::npos, "top-level only: subdirectories are not scanned");
+  check(format_skills(tmpdir(), 8, 1200) == "", "an empty directory yields no skills block");
+
+  // Limits: the limit and the per-file cap both bind.
+  std::string dir2 = tmpdir();
+  touch(dir2 + "/1.md", "one");
+  touch(dir2 + "/2.md", "two");
+  std::string limited = format_skills(dir2, 1, 1200);
+  check(limited.find("### 1.md") != std::string::npos && limited.find("### 2.md") == std::string::npos,
+        "the file limit is applied (first by name wins)");
+  touch(dir2 + "/big.md", std::string(3000, 'x'));
+  std::string dir3 = tmpdir();
+  touch(dir3 + "/big.md", std::string(3000, 'x'));
+  std::string capped = format_skills(dir3, 8, 100);
+  size_t body_at = capped.find("### big.md\n");
+  size_t x_count = 0;
+  for (size_t i = body_at + 11; i < capped.size(); ++i)
+    if (capped[i] == 'x')
+      ++x_count;
+  check(x_count == 100, "the body is cut to max_chars");
+}
+
 int main() {
   test_suffix_helper();
   test_list_text_files_short_names();
+  test_format_skills();
   test_jail_path();
   test_protected_path();
   test_approval();

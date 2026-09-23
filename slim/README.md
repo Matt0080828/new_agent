@@ -182,13 +182,16 @@ The C++ client prints the budget summary and the manifest per turn too, and its
 - Prompt trimmed to ~6000 chars (~2048-token class)
 - RAG: FTS5 keyword search over `slim/skills`, `slim/docs`, `slim/data`
 - Tools (one JSON call then a final answer): `rag_search`, `read_file`, `write_file` (jailed, 8 KiB), `mqtt_publish` only if `SLIM_MQTT_HTTP` is set
-- Skills: `slim/skills/*.md` injected as text; scripts are not executed
-- Session turns stored as append-only JSONL under `<data-dir>/sessions/`; the RAG corpus
-  is `<data-dir>/slim.sqlite` (SQLite FTS5, never writable through a tool)
+- Skills: `slim/skills/*.md` injected into every prompt as text (both clients); scripts are not executed
+- Long-term memory: `memory.md` in the data dir, injected into every prompt. The C++ client
+  appends a fact with `/remember TEXT`; a model with `--allow-write` may rewrite it (read first)
+- Session turns stored as append-only JSONL under `<data-dir>/sessions/`; the session files are
+  part of the RAG corpus, so old turns stay searchable with `/rag`. The corpus DB itself is
+  `<data-dir>/slim.sqlite` (SQLite FTS5, never writable through a tool)
 
 ## Tests
 
-All seven files together are **103 tests**; the one-shot form is
+All seven files together are **105 tests**; the one-shot form is
 `python3 -S -m unittest discover -s slim -p 'test_*.py'`.
 
 ```bash
@@ -213,7 +216,7 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 81 + 54 + 39 + 63 = 237 checks in four binaries
+make -C slim/cpp test        # 89 + 54 + 51 + 63 = 257 checks in four binaries
 ./slim/cpp/slim-agent --help
 ```
 
@@ -410,7 +413,10 @@ chmod +x /data/slim/run
 
 Adding `--allow-write` to that call is the only way the model may write, and even then never to
 the session store, any `*.sqlite`, or outside the data directory. The corpus is just files:
-`--skills-dir` and `--docs-dir` are scanned for `.md`/`.txt`, and `/rag` searches them.
+`--skills-dir` and `--docs-dir` are scanned for `.md`/`.txt`, the session history is searched
+as `session/...`, and `/rag` covers all of it. Skills in `--skills-dir` are also injected into
+the prompt as guidance, and `memory.md` (long-term memory, one `/remember TEXT` away) is in
+every prompt.
 
 ```bash
 # same staging rule as the binary: docker cp into the container, adb push onto the device
@@ -421,8 +427,8 @@ docker exec adb-t830-run adb shell '/data/slim/run --once "/rag openwrt"'
 ```
 
 A hit names its source (`doc/...` for `--docs-dir`, `skill/...` for `--skills-dir`, `data/...`
-for the data directory itself), so an empty corpus answers with an empty list rather than an
-error.
+for the data directory itself, `session/...` for conversation history), so an empty corpus
+answers with an empty list rather than an error.
 
 ### When the model runs on the CPE itself (llama.cpp)
 
@@ -538,7 +544,8 @@ The Python client's `--help` lists its full set, which is the same plus `--confi
 `--timeout`, `--show-history`. A model that emits the tool JSON (the prompt shows the format)
 gets the tools directly; a 270M-class local model does not do it reliably, so the `/rag`,
 `/read`, `/write`, `/mqtt`, `/run`, `/history`, `/help` slash commands remain the
-deterministic path. RAG is a keyword scan of `.md`/`.txt` (no SQLite in the C++ client).
+deterministic path. RAG is a keyword scan of `.md`/`.txt` and the session history (no SQLite
+in the C++ client); skills and `memory.md` are injected into the prompt.
 
 **Verified on the device: a live model turn.** With the host PC on the CPE's LAN
 (`br-lan 192.168.1.0/24`), LM Studio on the host is reachable from the CPE and both builds

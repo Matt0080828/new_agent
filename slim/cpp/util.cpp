@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <fcntl.h>
 #include <signal.h>
@@ -257,6 +258,29 @@ static void walk(const std::string& dir, const std::string& prefix,
 void list_text_files(const std::string& root, const std::string& prefix,
                      std::vector<std::pair<std::string, std::string> >& out) {
   walk(root, prefix, out);
+}
+
+std::string format_skills(const std::string& root, int limit, int max_chars) {
+  DIR* d = opendir(root.c_str());
+  if (!d)
+    return "";
+  std::vector<std::string> names;
+  struct dirent* de;
+  while ((de = readdir(d)) != 0) {
+    if (has_suffix(de->d_name, ".md"))
+      names.push_back(de->d_name);
+  }
+  closedir(d);
+  if (names.empty())
+    return "";
+  std::sort(names.begin(), names.end());
+  if ((int)names.size() > limit)
+    names.resize((size_t)limit);
+  std::ostringstream o;
+  o << "Available skills (markdown only, do not execute):";
+  for (size_t i = 0; i < names.size(); ++i)
+    o << "\n### " << names[i] << "\n" << read_file_limited(root + "/" + names[i], (size_t)max_chars);
+  return o.str();
 }
 
 // ---- added: running a command without a shell (see run_argv_capture) ----

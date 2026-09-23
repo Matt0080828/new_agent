@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sstream>
 #include <sys/stat.h>
@@ -211,4 +212,57 @@ std::string json_unescape(const std::string& in) {
     }
   }
   return out;
+}
+
+void list_session_files(const std::string& data_dir,
+                        std::vector<std::pair<std::string, std::string> >& out) {
+  const std::string dir = data_dir + "/sessions";
+  DIR* d = opendir(dir.c_str());
+  if (!d)
+    return;
+  struct dirent* de;
+  while ((de = readdir(d)) != 0) {
+    if (!has_suffix(de->d_name, ".jsonl"))
+      continue;
+    out.push_back(std::make_pair(std::string("session/") + de->d_name,
+                                 read_file_limited(dir + "/" + de->d_name, 64 * 1024)));
+  }
+  closedir(d);
+}
+
+std::string memory_path(const std::string& data_dir) {
+  return data_dir + "/memory.md";
+}
+
+bool memory_append(const std::string& data_dir, const std::string& text, std::string& why) {
+  if (text.empty()) {
+    why = "nothing to remember";
+    return false;
+  }
+  if (!make_dirs(data_dir, why))
+    return false;
+  int fd = open(memory_path(data_dir).c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (fd < 0) {
+    why = "cannot write to " + memory_path(data_dir) + ": " + std::strerror(errno);
+    return false;
+  }
+  std::string bytes = text + "\n";
+  size_t done = 0;
+  while (done < bytes.size()) {
+    ssize_t n = write(fd, bytes.data() + done, bytes.size() - done);
+    if (n < 0) {
+      if (errno == EINTR)
+        continue;
+      why = "cannot write to " + memory_path(data_dir) + ": " + std::strerror(errno);
+      close(fd);
+      return false;
+    }
+    done += (size_t)n;
+  }
+  close(fd);
+  return true;
+}
+
+std::string memory_load(const std::string& data_dir, size_t max_chars) {
+  return read_file_limited(memory_path(data_dir), max_chars);
 }

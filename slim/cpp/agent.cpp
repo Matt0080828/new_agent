@@ -131,6 +131,7 @@ static std::vector<Hit> rag_search(const Cfg& cfg, const std::string& q, int lim
   list_text_files(cfg.skills_dir, "skill", files);
   list_text_files(cfg.docs_dir, "doc", files);
   list_text_files(cfg.data_dir, "data", files);
+  list_session_files(cfg.data_dir, files);  // conversation history is searchable too
   std::vector<Hit> hits;
   if (q.empty())
     return hits;
@@ -264,7 +265,7 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
   std::string rest;
   std::string cmd = first_word(line, rest);
   if (cmd == "/help" || cmd == "/h")
-    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\n/run CMD [ARGS]\n/history\nplain text goes to the LLM";
+    return "/rag QUERY\n/read PATH\n/write PATH TEXT\n/mqtt TOPIC PAYLOAD\n/run CMD [ARGS]\n/remember TEXT\n/history\nplain text goes to the LLM";
   if (cmd == "/history" || cmd == "/hist") {
     std::vector<Turn> turns = session_load(cfg.session_file, cfg.history);
     if (turns.empty())
@@ -316,6 +317,15 @@ static std::string run_slash(const Cfg& cfg, const std::string& line) {
     js << "{\"topic\":\"" << json_escape(topic) << "\",\"payload\":\"" << json_escape(payload) << "\"}";
     return run_tool(tool_env_from(cfg), "mqtt_publish", js.str(), true, 0, 0);
   }
+  if (cmd == "/remember") {
+    // Long-term memory: a line the model sees in every later prompt, on every session.
+    std::string why;
+    if (rest.empty())
+      return "usage: /remember TEXT";
+    if (!memory_append(cfg.data_dir, rest, why))
+      return "memory error: " + why;
+    return "remembered; the model sees it from the next turn";
+  }
   if (cmd == "/run") {
     // The operator (or a script) asked for this, so the gate is the allowlist; the
     // model's tool path goes through the same run_tool() gates with human=false.
@@ -365,8 +375,17 @@ static std::string run_turn(const Cfg& cfg, const std::string& user) {
       "{\"tool\":\"run_command\",\"command\":\"uptime\",\"args\":\"-s\"} "
       "(run_command: the name must be in commands.allow; never a shell)\n"
       "After a tool result, answer in plain text.\n";
+  // Skills are prompt text (same contract as the Python client), and memory.md is the
+  // small set of facts that survive sessions; both are injected into every turn.
+  std::string context = format_skills(cfg.skills_dir, 8, 1200);
+  std::string memory = memory_load(cfg.data_dir, 1600);
+  if (!memory.empty()) {
+    if (!context.empty())
+      context += "\n";
+    context += "Long-term memory (facts that survive sessions; the operator appends with /remember):\n" + memory;
+  }
   msgs.push_back(std::make_pair(std::string("user"),
-                                tool_hint + "Q: " + cap_prompt(u, kMaxPrompt) + "\nA:"));
+                                tool_hint + context + "\n" + "Q: " + cap_prompt(u, kMaxPrompt) + "\nA:"));
   std::string reply = chat_fallback(cfg, msgs);
   // One bounded tool round: if the model answered with a tool call, run it as a
   // model-initiated call - every gate applies (policy flags, the allowlist, the
@@ -421,6 +440,9 @@ static void usage() {
             << "  slim-agent --base-url URL --model ID [--once TEXT]\n"
             << "  /rag QUERY  /read PATH  /write PATH TEXT  /mqtt TOPIC PAYLOAD\n"
             << "  /run CMD [ARGS] runs an allowlisted command (no shell; see below)\n"
+            << "  /remember TEXT appends a fact to memory.md, which the model sees in every turn\n"
+            << "  skills: *.md in --skills-dir is injected into the prompt; /rag also searches it\n"
+            << "          and the session history\n"
             << "  stream: --stream prints tokens as they arrive (SLIM_STREAM=1)\n"
             << "  session: --session NAME --history N (default 6; 0 replays nothing, -1 all)\n"
             << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"

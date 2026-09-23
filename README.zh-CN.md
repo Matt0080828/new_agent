@@ -21,8 +21,8 @@ slim/README.md   完整手册：构建、部署、安装、配置、在装置上
 ## 在主机上构建与测试
 
 ```bash
-cd slim/cpp && make && make test                              # 81 + 54 + 39 + 63 = 237 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 103 tests，只用标准库
+cd slim/cpp && make && make test                              # 89 + 54 + 51 + 63 = 257 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 105 tests，只用标准库
 ```
 
 ## 为 CPE 构建

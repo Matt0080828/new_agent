@@ -20,6 +20,12 @@ std::string read_file_limited(const std::string& path, size_t maxn);
 bool write_file_limited(const std::string& path, const std::string& data, size_t maxn, std::string& err);
 void list_text_files(const std::string& root, const std::string& prefix,
                      std::vector<std::pair<std::string, std::string> >& out);
+
+// Skills are prompt text, with the same contract as the Python client: the top-level
+// *.md files of root (subdirectories are not scanned), sorted by name, at most `limit`
+// files, at most `max_chars` of body each. A skill is guidance for the model, never
+// something that executes. Returns "" when there is nothing to show.
+std::string format_skills(const std::string& root, int limit, int max_chars);
 bool string_in_list(const std::vector<std::string>& list, const std::string& s);
 // Runs argv directly - there is no shell involved anywhere in this path, so a `;`, `|`, `$()`
 // or backtick inside an argument is just a character that reaches the program as one argument.

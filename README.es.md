@@ -23,8 +23,8 @@ slim/README.md   El manual: compilación, despliegue, instalación, configuraci�
 ## Compilar y probar en el equipo anfitrión
 
 ```bash
-cd slim/cpp && make && make test                              # 81 + 54 + 39 + 63 = 237 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 103 tests, solo biblioteca estándar
+cd slim/cpp && make && make test                              # 89 + 54 + 51 + 63 = 257 checks
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 105 tests, solo biblioteca estándar
 ```
 
 ## Compilar para el CPE

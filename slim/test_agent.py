@@ -173,6 +173,28 @@ class SlimAgentTests(unittest.TestCase):
                       "without commands.allow nothing runs, even with the default-on policy")
         conn.close()
 
+    def test_system_prompt_includes_memory(self):
+        text = agent.system_prompt("skill body", "FACT: mesh needs MTU 1500")
+        self.assertIn("skill body", text)
+        self.assertIn("Long-term memory", text)
+        self.assertIn("FACT: mesh needs MTU 1500", text)
+        # Without memory the section is absent entirely (no dead prompt lines).
+        self.assertNotIn("Long-term memory", agent.system_prompt("skill body", ""))
+
+    def test_run_turn_injects_memory_into_the_prompt(self):
+        with open(os.path.join(self.td, "memory.md"), "w", encoding="utf-8") as fh:
+            fh.write("FACT: this box runs CAP-RE mesh\n")
+        args = agent._parse_args(["--base-url", self.url, "--model", "tiny",
+                                  "--data-dir", self.td, "--timeout", "5"])
+        cfg = agent.build_cfg(args)
+        import rag
+
+        conn = rag.connect(cfg["db"])
+        reply = agent.run_turn("hello", cfg, conn)
+        self.assertEqual(reply, "pong")
+        self.assertIn(b"CAP-RE mesh", self.httpd.last_body, "the memory fact is in the system prompt")
+        conn.close()
+
     def test_chat_error_raises(self):
         with self.assertRaises(SlimError):
             agent.chat_completion("http://127.0.0.1:1", "tiny", [{"role": "user", "content": "x"}], timeout=1)
