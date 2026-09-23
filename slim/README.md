@@ -220,13 +220,13 @@ make -C slim/cpp test        # 81 + 54 + 39 + 63 = 237 checks in four binaries
 Reference CPE (OpenWrt musl gcc 9.3):
 
 ```bash
-make -C slim/cpp t830          # dynamic, stripped, 138,240 bytes (~135 KB)
-make -C slim/cpp t830-static   # self-contained, 715,048 bytes (~698 KB), no NEEDED libs
+make -C slim/cpp t830          # dynamic, stripped, 142,352 bytes (~139 KB)
+make -C slim/cpp t830-static   # self-contained, 719,144 bytes (~702 KB), no NEEDED libs
 file slim/cpp/slim-agent-t830-static
 # ELF aarch64, statically linked, stripped, interpreter-less
 ```
 
-The current tree builds to `sha256 1c2c17b3…` (static) - the same bytes that were run on
+The current tree builds to `sha256 1e365e37…` (static) - the same bytes that were run on
 the device, so a rebuild can be compared with the verified build before deploying.
 
 Two artifacts on purpose. `slim-agent-t830` is the small one and needs
@@ -348,7 +348,7 @@ either (verified: `--help` from `/data/slim` exits 0).
 docker cp slim/cpp/slim-agent-t830-static adb-t830-run:/tmp/stage-binary
 docker exec adb-t830-run adb shell 'mkdir -p /data/slim/skills /data/slim/docs /data/slim/data &&
   cp /tmp/stage-binary /data/slim/slim-agent && chmod 755 /data/slim/slim-agent'
-docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still 1c2c17b3...
+docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still 1e365e37...
 docker exec adb-t830-run adb shell 'cd /data/slim && ./slim-agent --help | head -3'
 ```
 
@@ -519,7 +519,7 @@ Verified on the device (static build, sha256-matched):
 | `--dry-run-writes` | prints the manifest and writes nothing |
 | `sessions/...`, `*.sqlite`, `../escape` writes | all refused, with the expected wording |
 | `/run df -h` (allowlisted) | exit 0 with the real table; `ls` refused (not allowlisted), `/bin/ls` refused (a path) |
-| a model asked to run a command | model-initiated execution now exists in both clients: an allowlisted name runs (no shell), anything else is refused - re-verify on the CPE after the next build |
+| a model asked to run a command | verified with the current build: an allowlisted name runs (no shell) and its exit status is fed back, a non-allowlisted name is refused, `--no-allow-exec` denies an allowlisted one, and a model write of commands.allow is refused |
 | unreachable model endpoint | 3 attempts, then fails: bounded retry, no loop |
 
 Device facts measured on the box: OpenWrt 23.05.5, kernel 5.15.167,
@@ -600,6 +600,19 @@ $ ./slim-agent ... --once '/run ls /'       -> refusing to run ls: it is not in 
 $ ./slim-agent ... --once '/run /bin/ls'    -> a bare command name is required (no path)
 $ ./slim-agent ... --allow-write --once '/write commands.allow reboot'
                                              -> it is a permission file (the command allowlist)
+```
+
+Model-initiated, checked on the device the same way (allowlist: `df`, `uptime`): the model's
+tool JSON is parsed and gated, and the second request carries the result.
+
+```
+$ model asked to run uptime           -> allow: allowed by policy, "exit 0 ..." fed back
+$ model asked to run reboot           -> deny: not in the command allowlist
+$ model asked to write commands.allow -> deny: it is a permission file (the file is unchanged)
+$ model asked to run uptime, with --no-allow-exec
+                                      -> deny: blocked by policy: model-initiated run_command is not enabled
+$ model asked to run uptime with args "; touch /data/slim/data/pwned"
+                                      -> the metacharacters are literal argv tokens; no file appears
 ```
 
 Two things worth knowing about who can pull the trigger. **Both clients give the model a
