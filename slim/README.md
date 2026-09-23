@@ -1,10 +1,10 @@
-# t830-slim agent
+# slim-agent
 
 Stdlib rewrite: chat + SQLite FTS RAG + whitelist tools + markdown skills.
 Not Hermes.
 
-The C++ client in `cpp/` is **verified on a real T830 CPE** (OpenWrt 23.05.5, aarch64 musl,
-`evb6990_cpe_mt7990_emmc`, no python3 in the image): pushed over adb, sha256-matched, and
+The C++ client in `cpp/` is **verified on a real CPE** (OpenWrt 23.05.5, aarch64 musl,
+no python3 in the image): pushed over adb, sha256-matched, and
 run on the device - slash commands with read-back, the session store, the change-queue dry
 run and every fail-closed refusal behaved, with `real 0m 0.00s` startup. Live model turns are
 verified there as well: a streamed answer from a model server on the LAN, the session file it
@@ -217,7 +217,7 @@ make -C slim/cpp test        # 81 + 54 + 39 + 63 = 237 checks in four binaries
 ./slim/cpp/slim-agent --help
 ```
 
-T830 (OpenWrt musl gcc 9.3):
+Reference CPE (OpenWrt musl gcc 9.3):
 
 ```bash
 make -C slim/cpp t830          # dynamic, stripped, 138,240 bytes (~135 KB)
@@ -244,7 +244,7 @@ with `undefined reference to _Unwind_Resume`.
 Everything below assumes a clone of <https://github.com/Matt0080828/t830-slim-agent>
 (this README is that repository's `slim/README.md`).
 
-The C++ client is the only client that can run on the T830: the image ships **no python3**,
+The C++ client is the only client that can run on the reference CPE: its image ships **no python3**,
 so the Python agent is not a smaller option, it is no option.
 
 The reachable entry point is **adb over USB**, not the network: the management IP answers
@@ -294,7 +294,7 @@ no network, writes only under its own `/tmp/slim-smoke/data-$$`, and deletes not
 docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/data \
   --session smoke --once "/help"'
 docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/data \
-  --session smoke --once "/write note.txt hello-from-t830"'
+  --session smoke --once "/write note.txt hello-from-cpe"'
 docker exec adb-t830-run adb shell 'cd /tmp/slim && cat /tmp/slim/data/note.txt'   # read it back
 docker exec adb-t830-run adb shell 'cd /tmp/slim && ./slim-agent-t830-static --data-dir /tmp/slim/data \
   --dry-run-writes --session smoke --once "/write nope.txt should-not-exist"'
@@ -424,7 +424,7 @@ A hit names its source (`doc/...` for `--docs-dir`, `skill/...` for `--skills-di
 for the data directory itself), so an empty corpus answers with an empty list rather than an
 error.
 
-### When the model runs on the T830 itself (llama.cpp)
+### When the model runs on the CPE itself (llama.cpp)
 
 Nothing special is required: the agent only knows an OpenAI-compatible endpoint, so a
 `llama-server` on the device is one flag away - `--base-url http://127.0.0.1:8080/v1` - and
@@ -523,7 +523,7 @@ Verified on the device (static build, sha256-matched):
 | unreachable model endpoint | 3 attempts, then fails: bounded retry, no loop |
 
 Device facts measured on the box: OpenWrt 23.05.5, kernel 5.15.167,
-`MediaTek evb6990_cpe_mt7990_emmc`, 1,736,840 kB RAM (1,183,552 kB available), `/tmp` tmpfs
+1,736,840 kB RAM (1,183,552 kB available), `/tmp` tmpfs
 838 MB, `/overlay` 116 MB free, `/data` 12.5 GB, root shell, and both
 `/lib/ld-musl-aarch64.so.1` and `libstdc++.so.6.0.30` present (so the dynamic artifact runs
 too, but the static one needs nothing).

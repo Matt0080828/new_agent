@@ -1,8 +1,8 @@
-# t830-slim-agent
+# slim-agent
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md) | **日本語** | [한국어](README.ko.md) | [Español](README.es.md)
 
-Askey T830 / Fibocom FG370 CPE（OpenWrt 23.05.5、aarch64 musl、**イメージに python3 は入っていません**）
+参照 CPE（OpenWrt 23.05.5、aarch64 musl、**イメージに python3 は入っていません**）
 上でそのまま動く小さな agent です。OpenAI 互換エンドポイント経由のチャット、markdown に対する
 キーワード RAG、ホワイトリスト方式のツール層、markdown スキル —— そして書き込みの手前には
 fail-closed ポリシーがあります。
@@ -60,7 +60,7 @@ C++ クライアントに**設定ファイルはありません**。フラグと
 `SLIM_DOCS_DIR` / `SLIM_SKILLS_DIR` を設定するか、さもないと `/rag` は何も見つけません。フラグ／環境変数／既定値の一覧、インストール手順、設定を
 まとめて持つ wrapper スクリプトは `slim/README.md` にあります。
 
-## T830 自身で動くモデルを使う
+## CPE 自身で動くモデルを使う
 
 agent が知っているのは OpenAI 互換エンドポイントだけなので、llama.cpp の server を端末で動かす
 場合の違いは `--base-url` だけです。LAN もその他の設定も不要です：

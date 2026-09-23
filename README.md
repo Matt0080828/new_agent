@@ -1,8 +1,8 @@
-# t830-slim-agent
+# slim-agent
 
 **English** | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
-A small agent that runs on the Askey T830 / Fibocom FG370 CPE (OpenWrt 23.05.5, aarch64 musl,
+A small agent that runs on the reference CPE (OpenWrt 23.05.5, aarch64 musl,
 **no python3 in the image**): chat over an OpenAI-compatible endpoint, keyword RAG over
 markdown, a whitelist tool layer, markdown skills - and a fail-closed policy in front of
 anything that writes.
@@ -60,7 +60,7 @@ CWD-relative rule (`./slim/docs`, `./slim/skills`): with the layout above, run f
 flag/environment/default table, the install commands and a wrapper script that holds the
 configuration are in `slim/README.md`.
 
-## Using a model that runs on the T830 itself
+## Using a model that runs on the CPE itself
 
 The agent only knows an OpenAI-compatible endpoint, so a `llama.cpp` server on the device is a
 `--base-url` change and nothing else - no LAN, no other setting:

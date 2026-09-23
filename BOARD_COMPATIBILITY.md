@@ -28,7 +28,7 @@ for Q4 models:
 
 | Model class (Q4) | Weights | Board RAM needed | Example boards |
 | --- | --- | --- | --- |
-| 270M-0.5B | ~200-470 MB | ~1 GB | T830 / FG370 CPE (**verified**), RPi 3B+ / RPi 4 (1-2 GB), Orange Pi Zero 2W (2 GB), Rock Pi S (2 GB), MT7986/MT7988-class CPE |
+| 270M-0.5B | ~200-470 MB | ~1 GB | the reference CPE (**verified**), RPi 3B+ / RPi 4 (1-2 GB), Orange Pi Zero 2W (2 GB), Rock Pi S (2 GB), MT7986/MT7988-class CPE |
 | 1-1.5B | ~0.6-1 GB | ~2-4 GB | RPi 4 (4 GB), RPi 5, Orange Pi 5, Khadas VIM3, Rock 5B |
 | 3B and up | 2 GB+ | 8 GB+, or a separate accelerator | x86 mini-PC (N100 class) and up - or use Mode B |
 
@@ -48,13 +48,13 @@ RAM is the entire footprint: RPi Zero 2W and other 512 MB-class boards, 32-bit
 SBCs, x86 NAS boxes, Docker containers, a router with a small flash partition.
 Point `--base-url` at any OpenAI-compatible server (llama.cpp, LM Studio,
 vLLM, an API key) and optionally `--fallback-url` for a local-first-with-LAN-
-escape setup. This direction is verified too: the T830 answered through an
+escape setup. This direction is verified too: the reference CPE answered through an
 LM Studio on the host PC across the CPE's LAN (45-63 s per turn on the shared
 endpoint).
 
 ## Verified configurations
 
-- **T830 / Fibocom FG370 CPE** - MediaTek `evb6990_cpe_mt7990_emmc`, OpenWrt
+- **The reference CPE** - OpenWrt
   23.05.5, aarch64 musl, **no python3 in the image**, `/tmp` tmpfs 838 MB,
   `/overlay` 116 MB, `/data` 12.5 GB. Static binary sha256-matched from the
   host; both modes exercised on the box (see `slim/README.md` for the
@@ -66,7 +66,7 @@ endpoint).
 
 | Architecture | Status | Notes |
 | --- | --- | --- |
-| aarch64 | **verified** | T830; any ARM64 Linux is in the same class |
+| aarch64 | **verified** | the reference CPE; any ARM64 Linux is in the same class |
 | x86_64 | **verified** | host build and tests |
 | armv7 (32-bit) | untested, expected to build | the sources are plain POSIX C++11 with no architecture-specific code; bring an armv7 toolchain (`CXX=... make`) - RPi 1/2 and MT7621-class routers are the usual targets |
 | mips / RISC-V | untested | same expectation, no guarantee |
@@ -76,7 +76,7 @@ endpoint).
 
 1. **Get the agent binary onto the board.**
    - ARM64 OpenWrt: `make -C slim/cpp t830-static` (the `TC` variable points
-     at the FG370 OpenWrt toolchain; any aarch64 musl gcc will do) and
+     at the reference OpenWrt toolchain; any aarch64 musl gcc will do) and
      `slim/deploy/run-on-t830.sh` is the pattern: push, compare sha256 on
      both sides, smoke test.
    - Any other Linux: `CXX=<board-cross-g++> make -C slim/cpp host`, or

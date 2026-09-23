@@ -1,8 +1,8 @@
-# t830-slim-agent
+# slim-agent
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | **简体中文** | [日本語](README.ja.md) | [한국어](README.ko.md) | [Español](README.es.md)
 
-一个可以直接跑在 Askey T830 / Fibocom FG370 CPE 上的小型 agent（OpenWrt 23.05.5、aarch64 musl，
+一个可以直接跑在参考 CPE 上的小型 agent（OpenWrt 23.05.5、aarch64 musl，
 **系统镜像里没有 python3**）：通过 OpenAI 兼容端点对话、对 markdown 做关键词 RAG、白名单工具层、
 markdown 技能 —— 并且在任何写入动作之前都先经过 fail-closed 策略。
 
@@ -53,7 +53,7 @@ C++ client **没有配置文件**：只有标志与环境变量，而且**标志
 情况 —— 所以永远显式带上 `--data-dir`。docs 与 skills 目录同样是「相对工作目录」的规则（`./slim/docs`、`./slim/skills`）：用上面的布局时要从 `/data` 执行（或设 `SLIM_DOCS_DIR` / `SLIM_SKILLS_DIR`），否则 `/rag` 什么都搜不到。完整的标志／环境变量／默认值对照表、安装命令，以及把配置
 集中其中的 wrapper 脚本，都在 `slim/README.md`。
 
-## 使用运行在 T830 自身的模型
+## 使用运行在 CPE 自身的模型
 
 agent 只认一个 OpenAI 兼容端点，所以把 llama.cpp server 跑在装置上，只是改 `--base-url`
 而已 —— 不需要 LAN，其他配置都不动：
