@@ -12,9 +12,15 @@ footprint is:
 | Artifact | Size | Dependencies |
 | --- | --- | --- |
 | C++ client, static (aarch64 musl) | 731,432 bytes | none (`NEEDED 0`, stripped) |
-| C++ client, dynamic (aarch64 musl) | 154,640 bytes | musl loader + libstdc++ on the device |
+| C++ client, static + TLS (aarch64 musl) | 1,419,848 bytes | none (`NEEDED 0`, stripped) - mbedTLS linked in |
+| C++ client, dynamic (aarch64 musl) | 154,648 bytes | musl loader + libstdc++ on the device |
 | C++ client, host (`g++ -O2 -std=c++11`) | same sources | glibc (or the platform C++ runtime) |
 | Python client | sources | Python 3, standard library only (no pip packages) |
+
+TLS (https://) is an opt-in build (`make tls` / `make t830-static-tls`) that links the
+vendored mbedTLS 3.6.2; the default builds stay TLS-free and small. Either way the
+agent is outbound-only, and a bearer token is refused on plaintext http:// unless
+`--allow-plaintext-key` is passed. See `slim/README.md` for the details.
 
 No npm, no virtualenv, no service manager. A board that can execute a 1 MB
 static ELF - or that already has Python 3 - can run the agent; its resident

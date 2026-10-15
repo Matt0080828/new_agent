@@ -191,7 +191,7 @@ The C++ client prints the budget summary and the manifest per turn too, and its
 
 ## Tests
 
-All seven files together are **105 tests**; the one-shot form is
+All the Python files together are **114 tests**; the one-shot form is
 `python3 -S -m unittest discover -s slim -p 'test_*.py'`.
 
 ```bash
@@ -202,6 +202,7 @@ python3 -S slim/test_policy.py   # policy + the state-file regression
 python3 -S slim/test_retry.py    # retry policy + "mqtt is never retried"
 python3 -S slim/test_sse.py      # SSE parser, streaming and "no retry after a delta"
 python3 -S slim/test_session.py  # session store, format compatibility with the C++ client
+python3 -S slim/test_net.py      # credential policy + redirect safety
 ```
 
 `test_policy.py` includes the regression that matters most: open the default-layout
@@ -216,21 +217,27 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 89 + 54 + 51 + 63 = 257 checks in four binaries
+make -C slim/cpp test        # 94 + 54 + 51 + 64 = 263 checks in four binaries
+make -C slim/cpp tls         # host build with https:// (vendored mbedTLS)
+make -C slim/cpp tls-test    # the same 263 checks, TLS compiled in
 ./slim/cpp/slim-agent --help
 ```
 
 Reference CPE (OpenWrt musl gcc 9.3):
 
 ```bash
-make -C slim/cpp t830          # dynamic, stripped, 154,640 bytes (~151 KB)
+make -C slim/cpp t830          # dynamic, stripped, 154,648 bytes (~151 KB)
 make -C slim/cpp t830-static   # self-contained, 731,432 bytes (~714 KB), no NEEDED libs
+make -C slim/cpp t830-static-tls  # + TLS: 1,419,848 bytes, still NEEDED 0, stripped
 file slim/cpp/slim-agent-t830-static
 # ELF aarch64, statically linked, stripped, interpreter-less
 ```
 
-The current tree builds to `sha256 fbb8beba…` (static) - the same bytes that were run on
-the device, so a rebuild can be compared with the verified build before deploying.
+The current tree builds to `sha256 dfa81f00…` (non-TLS static) or `4dcf7191…`
+(with TLS). The TLS builds are opt-in (`tls`, `tls-test`, `t830-tls`,
+`t830-static-tls`) and link the vendored mbedTLS 3.6.2 under `slim/cpp/third_party/`;
+the default builds above stay TLS-free so the on-device artifact keeps `NEEDED 0`
+and its size.
 
 Two artifacts on purpose. `slim-agent-t830` is the small one and needs
 `libstdc++.so.6`, `libgcc_s.so.1` and `libc.so` on the device - OpenWrt images usually
@@ -351,7 +358,7 @@ either (verified: `--help` from `/data/slim` exits 0).
 docker cp slim/cpp/slim-agent-t830-static adb-t830-run:/tmp/stage-binary
 docker exec adb-t830-run adb shell 'mkdir -p /data/slim/skills /data/slim/docs /data/slim/data &&
   cp /tmp/stage-binary /data/slim/slim-agent && chmod 755 /data/slim/slim-agent'
-docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still fbb8beba...
+docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # dfa81f00 (non-TLS) or 4dcf7191 (TLS)
 docker exec adb-t830-run adb shell 'cd /data/slim && ./slim-agent --help | head -3'
 ```
 
@@ -374,6 +381,9 @@ created `flagwins.jsonl`). Every setting it understands, with the real defaults 
 | Markdown skills | `--skills-dir` | `SLIM_SKILLS_DIR` | `./slim/skills` |
 | RAG corpus | `--docs-dir` | `SLIM_DOCS_DIR` | `./slim/docs` |
 | MQTT bridge | `--mqtt-http` | `SLIM_MQTT_HTTP` | empty - `/mqtt` stays unavailable |
+| MQTT token | `--mqtt-token` | `SLIM_MQTT_TOKEN` | empty - no Authorization header on the ingest POST |
+| CA bundle (TLS) | `--ca-file` | `SLIM_CA_FILE` | `/etc/ssl/certs/ca-certificates.crt` |
+| Token over plaintext | `--allow-plaintext-key` | `SLIM_ALLOW_PLAINTEXT_KEY=1` | off - a token on `http://` is refused |
 | Session name | `--session` | `SLIM_SESSION` | `default` |
 | Replayed turns | `--history` | `SLIM_HISTORY` | `6` (`0` none, negative every turn) |
 | Reply cap | `--max-tokens` | `SLIM_MAX_TOKENS` | `64` |
@@ -536,7 +546,8 @@ too, but the static one needs nothing).
 
 Flags accepted by the C++ client (its `--help` prints a shorter summary): `--base-url`,
 `--fallback-url`, `--model`, `--fallback-model`, `--api-key`, `--data-dir`, `--skills-dir`,
-`--docs-dir`, `--mqtt-http`, `--max-tokens`, `--attempts`, `--retry-base-ms`,
+`--docs-dir`, `--mqtt-http`, `--mqtt-token`, `--max-tokens`, `--attempts`, `--retry-base-ms`,
+`--ca-file`, `--allow-plaintext-key`,
 `--http-verbose`, `--stream`, `--dry-run-writes`, `--session`, `--history`, `--allow-write`,
 `--allow-mqtt`, `--allow-exec` / `--no-allow-exec`, `--non-interactive` / `--interactive`,
 `--once`, `--ingest-only`, `--help`.
@@ -569,6 +580,29 @@ turns but not unlimited, so a slow server fails the turn instead of hanging. If 
 longer one, change that constant and rebuild; the Python client has the knob as
 `--timeout` / `SLIM_TIMEOUT`. Exceeding it cuts the turn mid-prefill, and LM Studio logs
 `Client disconnected. Stopping generation...`.
+
+## Network security
+
+The agent is outbound-only (there is no listen mode) and the model never chooses the
+endpoint - `--base-url`, `--fallback-url` and `--mqtt-http` come from flags, the
+environment or the config file - so there is no SSRF surface. What the transport does:
+
+- **TLS is opt-in.** The default `host` / `t830` / `t830-static` builds speak plain
+  `http://`; an `https://` URL fails with `https:// requires a TLS-enabled build`.
+  `make tls` / `make t830-static-tls` link the vendored mbedTLS 3.6.2 and verify the
+  peer against a CA bundle (`--ca-file` / `SLIM_CA_FILE`, default
+  `/etc/ssl/certs/ca-certificates.crt`). Verification is required: a missing bundle or
+  an unverifiable chain fails the turn, never a warning.
+- **No token over plaintext http.** A bearer token (`--api-key`, `--mqtt-token`) is
+  refused on an `http://` URL unless the operator passes `--allow-plaintext-key` /
+  `SLIM_ALLOW_PLAINTEXT_KEY=1`.
+- **Redirects do not carry credentials.** In the Python client the `Authorization`
+  header is dropped when a redirect leaves the origin or downgrades to http.
+- **Bounded.** Responses are capped at 256 KiB; retries are bounded and never repeat a
+  mutation; unknown failures are not retried.
+
+The TLS static binary is ~1.42 MB against 731 KB without it: the cost of a TLS stack the
+reference CPE image does not ship.
 
 ## Out of scope
 

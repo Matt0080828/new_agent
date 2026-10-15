@@ -30,8 +30,9 @@ cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 105 tests、標
 ## CPE 向けビルド
 
 ```bash
-make -C slim/cpp t830           # 動的リンク、154,640 bytes。端末側に libstdc++/libgcc が必要
+make -C slim/cpp t830           # 動的リンク、154,648 bytes。端末側に libstdc++/libgcc が必要
 make -C slim/cpp t830-static    # 731,432 bytes、NEEDED 0、strip 済み。端末側に何も要りません
+make -C slim/cpp t830-static-tls # +TLS: 1,419,848 bytes、NEEDED 0。TLS は任意（mbedTLS）。README.md の "Network security" 参照
 ```
 
 ## CPE へ入れる
@@ -90,7 +91,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 
 | 確認項目 | CPE 上での結果 |
 | --- | --- |
-| artifact の同一性 | `sha256 fbb8beba...` がホストと端末で一致（`NEEDED 0`、strip 済み） |
+| artifact の同一性 | `sha256 dfa81f00...` がホストと端末で一致（`NEEDED 0`、strip 済み） |
 | `./slim/deploy/run-on-t830.sh` | exit 0：スラッシュコマンドの書き込みと読み戻し、session ストア、`--dry-run-writes` が何も書かないこと、fail-closed の拒否がすべて期待どおり |
 | LAN 経由の live model ターン | ストリーム回答、続いて `--history 6` が前のターンの数字を再現、`--history 0` では再現できない —— 負のコントロール |
 | **モデルが端末自身で動く場合** | loopback の `llama-server` + 0.5B Q4：4 秒で `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` がそれらのターンを再生、主エンドポイントが落ちても `--fallback-url` が回答 |

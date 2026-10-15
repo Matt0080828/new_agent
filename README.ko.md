@@ -29,8 +29,9 @@ cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 105 tests, 표�
 ## CPE용 빌드
 
 ```bash
-make -C slim/cpp t830           # 동적 링크, 154,640 bytes; 기기에 libstdc++/libgcc 필요
+make -C slim/cpp t830           # 동적 링크, 154,648 bytes; 기기에 libstdc++/libgcc 필요
 make -C slim/cpp t830-static    # 731,432 bytes, NEEDED 0, strip 완료; 기기에 설치할 것이 없음
+make -C slim/cpp t830-static-tls # +TLS: 1,419,848 bytes, NEEDED 0. TLS는 선택(mbedTLS). README.md "Network security" 참고
 ```
 
 ## CPE에 넣기
@@ -88,7 +89,7 @@ server가 요구하는 것은 `libstdc++.so.6`, `libgcc_s.so.1`, musl `libc`뿐�
 
 | 검증 항목 | CPE에서의 결과 |
 | --- | --- |
-| artifact 무결성 | `sha256 fbb8beba...`이 호스트와 기기에서 일치(`NEEDED 0`, strip 완료) |
+| artifact 무결성 | `sha256 dfa81f00...`이 호스트와 기기에서 일치(`NEEDED 0`, strip 완료) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: 슬래시 명령 쓰기 후 읽어오기, session 저장소, `--dry-run-writes`가 아무것도 쓰지 않음, fail-closed 거부 모두 정상 |
 | LAN 경유 live model 턴 | 스트림 답변, 이어서 `--history 6`이 이전 턴의 숫자를 재현, `--history 0`은 재현하지 못함 — 음성 대조 |
 | **모델이 기기 자체에서 도는 경우** | loopback의 `llama-server` + 0.5B Q4: 4초에 `PONG!`, prompt 12 tok/s, 생성 7.9 tok/s, `/history`가 그 턴들을 재생, 주 엔드포인트가 죽어도 `--fallback-url`이 응답 |

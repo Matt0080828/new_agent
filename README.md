@@ -24,16 +24,51 @@ BOARD_COMPATIBILITY.md  which development boards run it, and where the model has
 ## Build and test on the host
 
 ```bash
-cd slim/cpp && make && make test                              # 89 + 54 + 51 + 63 = 257 checks
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 105 tests, standard library only
+cd slim/cpp && make && make test                              # 94 + 54 + 51 + 64 = 263 checks
+cd slim/cpp && make tls && make tls-test                       # the same, with TLS compiled in
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 114 tests, standard library only
 ```
 
 ## Build for the CPE
 
 ```bash
-make -C slim/cpp t830           # dynamic, 154,640 bytes; needs libstdc++/libgcc on the device
+make -C slim/cpp t830           # dynamic, 154,648 bytes; needs libstdc++/libgcc on the device
 make -C slim/cpp t830-static    # 731,432 bytes, NEEDED 0, stripped; nothing to install there
 ```
+
+TLS is opt-in and vendored (mbedTLS 3.6.2 under `slim/cpp/third_party/`). The
+default builds above stay TLS-free; add `-tls` to link the stack in:
+
+```bash
+make -C slim/cpp tls              # host, with https://
+make -C slim/cpp t830-static-tls  # 1,419,848 bytes, still NEEDED 0, stripped
+```
+
+## Network security
+
+The client is outbound-only - it never listens - and the model never chooses the
+endpoint (`--base-url` / `--fallback-url` / `--mqtt-http` come from flags, the
+environment or the config file), so there is no SSRF surface. What the transport
+does protect:
+
+- **No TLS unless built in.** The default binaries speak plain `http://` only; an
+  `https://` URL fails with `https:// requires a TLS-enabled build`. That is the
+  right default for a llama.cpp / LM Studio endpoint on loopback or a trusted LAN,
+  where there is no key to leak.
+- **Opt-in TLS.** `make tls` / `make t830-static-tls` verify the peer against a CA
+  bundle (`--ca-file` / `SLIM_CA_FILE`, default `/etc/ssl/certs/ca-certificates.crt`).
+  Verification is required: a missing bundle or an unverifiable chain fails the turn,
+  it is never downgraded to a warning.
+- **No token on the wire without https.** A bearer token (`--api-key`,
+  `--mqtt-token`) is refused on a plaintext `http://` URL unless the operator passes
+  `--allow-plaintext-key` / `SLIM_ALLOW_PLAINTEXT_KEY=1`.
+- **Redirects do not carry credentials.** The Python client drops the
+  `Authorization` header when a redirect leaves the origin or downgrades to http.
+- **Bounded by design.** Responses are capped at 256 KiB, retries are bounded and
+  never repeat a mutation, and unknown failures are not retried.
+
+The TLS binary is ~1.42 MB static against 731 KB without it - the price of the
+dependency the reference CPE image does not ship.
 
 ## Put it on the CPE
 
@@ -90,7 +125,7 @@ numbers, and the caveats.
 
 | Check | Result on the CPE |
 | --- | --- |
-| artifact integrity | `sha256 fbb8beba...` matches on host and device (`NEEDED 0`, stripped) |
+| artifact integrity | `sha256 dfa81f00...` (non-TLS) / `4dcf7191...` (TLS) after the network-security work - re-run the on-device table below for the rebuilt binary |
 | `./slim/deploy/run-on-t830.sh` | exit 0: slash commands with read-back, the session store, `--dry-run-writes` writing nothing, every fail-closed refusal |
 | live model turn over the LAN | a streamed answer, then `--history 6` recalling the number from the earlier turn, then `--history 0` failing to - the negative control |
 | **model on the device itself** | `llama-server` on loopback + a 0.5B Q4: `PONG!` in 4 s, 12 tok/s prompt / 7.9 tok/s generation, `/history` replaying those turns, and `--fallback-url` answering through a dead primary |
@@ -98,6 +133,8 @@ numbers, and the caveats.
 | RAG corpus, no rebuild | markdown dropped into `docs/` and `skills/` is searched live: `/rag mt753x`, the multi-word `/rag probe -22`, `/rag HotSpotFlag` and `/rag OWE` each returned the right file first (2026-09-22) |
 | failing model (HTTP 400) | reports `HTTP status 400: <server message>` and writes no session file |
 
-A rebuild of this tree reproduces that exact artifact, so compare the sha256 before deploying.
-The full verified tables, the measured device facts, and the deploy scripts are in
+Those on-device results are the last verified run, from before the network-security work
+(P1-P4 + TLS). The current tree rebuilds to `sha256 dfa81f00...` (non-TLS) /
+`4dcf7191...` (TLS); re-run the table for the rebuilt binary before deploying. The full
+verified tables, the measured device facts, and the deploy scripts are in
 `slim/README.md` and `slim/deploy/`.

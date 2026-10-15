@@ -30,8 +30,9 @@ cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 105 tests, solo
 ## Compilar para el CPE
 
 ```bash
-make -C slim/cpp t830           # enlazado dinámico, 154,640 bytes; necesita libstdc++/libgcc en el dispositivo
+make -C slim/cpp t830           # enlazado dinámico, 154,648 bytes; necesita libstdc++/libgcc en el dispositivo
 make -C slim/cpp t830-static    # 731,432 bytes, NEEDED 0, sin símbolos; no hay que instalar nada allí
+make -C slim/cpp t830-static-tls # +TLS: 1.419.848 bytes, NEEDED 0; TLS opcional (mbedTLS). Véase "Network security" en README.md
 ```
 
 ## Ponerlo en el CPE
@@ -88,7 +89,7 @@ determinista de dirigir acciones. Ambos pueden convivir por invocación, y `--fa
 
 | Comprobación | Resultado en el CPE |
 | --- | --- |
-| integridad del artefacto | `sha256 fbb8beba...` coincide en anfitrión y dispositivo (`NEEDED 0`, sin símbolos) |
+| integridad del artefacto | `sha256 dfa81f00...` coincide en anfitrión y dispositivo (`NEEDED 0`, sin símbolos) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: comandos de barra con relectura, el almacén de sesiones, `--dry-run-writes` sin escribir nada y todos los rechazos fail-closed |
 | turno en vivo por la LAN | respuesta en streaming y después `--history 6` recordando el número del turno anterior; `--history 0` sin recordarlo — el control negativo |
 | **modelo en el propio dispositivo** | `llama-server` en loopback + un 0.5B Q4: `PONG!` en 4 s, 12 tok/s de prompt y 7,9 tok/s de generación, `/history` reproduciendo esos turnos y `--fallback-url` respondiendo con el endpoint principal caído |

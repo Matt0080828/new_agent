@@ -28,9 +28,30 @@ cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 105 tests，只
 ## 為 CPE 建置
 
 ```bash
-make -C slim/cpp t830           # 動態連結，154,640 bytes；裝置上需要 libstdc++/libgcc
+make -C slim/cpp t830           # 動態連結，154,648 bytes；裝置上需要 libstdc++/libgcc
 make -C slim/cpp t830-static    # 731,432 bytes、NEEDED 0、已 strip；裝置上不需安裝任何東西
+make -C slim/cpp t830-static-tls # +TLS：1,419,848 bytes、NEEDED 0。TLS 為選用（mbedTLS），詳見 README.md「Network security」
 ```
+
+## 網路安全
+
+這個 client 只對外連線（沒有監聽模式），而且**端點不是模型決定的**——`--base-url`、
+`--fallback-url`、`--mqtt-http` 只來自旗標、環境變數或設定檔，因此沒有 SSRF 面。傳輸層
+做了這些：
+
+- **TLS 是選用的。** 預設的 `host` / `t830` / `t830-static` 只講純文字 `http://`；餵
+  `https://` 會以 `https:// requires a TLS-enabled build` 失敗。`make tls` /
+  `make t830-static-tls` 會連結 vendored 的 mbedTLS 3.6.2，並用 CA bundle 驗證對端
+  （`--ca-file` / `SLIM_CA_FILE`，預設 `/etc/ssl/certs/ca-certificates.crt`）。驗證是
+  強制的：bundle 缺失或鏈無法驗證會讓該回合失敗，不會降級成警告。
+- **純文字 http 不帶 token。** bearer token（`--api-key`、`--mqtt-token`）在 `http://`
+  上會被拒絕，除非明示 `--allow-plaintext-key` / `SLIM_ALLOW_PLAINTEXT_KEY=1`。
+- **重新導向不帶憑證。** Python client 在 redirect 離開原 origin 或降級到 http 時會
+  丟掉 `Authorization`。
+- **有界。** 回應上限 256 KiB；retry 有界且絕不重送 mutation；未知錯誤不重試。
+
+TLS 靜態 binary 約 1.42 MB，對比未含 TLS 的 731 KB——這是參考 CPE image 沒附的 TLS
+stack 的代價。
 
 ## 放到 CPE 上
 
@@ -80,7 +101,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 
 | 檢查項目 | CPE 上的結果 |
 | --- | --- |
-| artifact 完整性 | `sha256 fbb8beba...` 在主機與裝置兩邊一致（`NEEDED 0`、已 strip） |
+| artifact 完整性 | `sha256 dfa81f00...` 在主機與裝置兩邊一致（`NEEDED 0`、已 strip） |
 | `./slim/deploy/run-on-t830.sh` | exit 0：斜線指令寫入後讀回、session 儲存、`--dry-run-writes` 確實沒寫檔、每一項 fail-closed 拒絕都正確 |
 | 走 LAN 的 live model 回合 | 串流回答；接著 `--history 6` 重播並答出前一回合的數字；`--history 0` 則答不出來 —— 負向對照 |
 | **模型跑在裝置自己身上** | loopback 上的 `llama-server` + 0.5B Q4：4 秒回 `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` 能重播那些回合，且 `--fallback-url` 在主端點壞掉時仍能作答 |
