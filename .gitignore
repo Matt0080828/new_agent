@@ -6,7 +6,15 @@ __pycache__/
 /slim/cpp/slim-agent
 /slim/cpp/slim-agent-t830
 /slim/cpp/slim-agent-t830-static
+/slim/cpp/slim-agent-tls
+/slim/cpp/slim-agent-t830-tls
+/slim/cpp/slim-agent-t830-static-tls
 /slim/cpp/tests/test_slim
 /slim/cpp/tests/test_sse
 /slim/cpp/tests/test_session
 /slim/cpp/tests/test_tools
+/slim/cpp/tests/test_slim-tls
+/slim/cpp/tests/test_sse-tls
+/slim/cpp/tests/test_session-tls
+/slim/cpp/tests/test_tools-tls
+/slim/cpp/build/
