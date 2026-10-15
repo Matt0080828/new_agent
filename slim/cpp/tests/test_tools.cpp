@@ -319,6 +319,13 @@ static void test_mqtt() {
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/mqtt", port);
   env.mqtt_http = url;
 
+  // Same credential rule as the chat API key: a bearer token is refused on plaintext http.
+  env.mqtt_token = "k";
+  std::string plain = run_tool(env, "mqtt_publish", "{\"topic\":\"a/b\",\"payload\":\"x\"}", false, 0, 0);
+  check(plain.find("plaintext") != std::string::npos,
+        "a bearer token over plaintext http is refused");
+  env.mqtt_token.clear();
+
   std::string denied = run_tool(env, "mqtt_publish", "{\"topic\":\"a/b\",\"payload\":\"x\"}", false, 0, 0);
   check(denied.find("not enabled") != std::string::npos, "denied without an opt-in");
 

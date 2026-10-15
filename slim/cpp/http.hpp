@@ -12,6 +12,11 @@ struct HttpResult {
 HttpResult http_post_json(const std::string& url, const std::string& json,
                           const std::string& bearer, int timeout_sec);
 
+// CA bundle used to verify TLS peers (https://). Set once at startup from --ca-file /
+// SLIM_CA_FILE. When TLS is not compiled in, or the bundle is missing/unreadable, an
+// https:// request fails closed rather than proceeding unverified.
+void http_set_ca_file(const std::string& path);
+
 // Bounded retry for the transport layer.
 //
 // Only read-ish calls are retried: the completion request is safe to repeat

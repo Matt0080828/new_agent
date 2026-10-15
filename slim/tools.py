@@ -11,6 +11,8 @@ import os
 import urllib.error
 import urllib.request
 
+import net
+
 from policy import protected_path
 from rag import search as rag_search
 
@@ -155,7 +157,7 @@ def _bounded(budget, text):
 
 
 def run_tool(name, args, conn, data_dir, mqtt_http="", queue=None, budget=None,
-             exec_allow=None, exec_path=None):
+             exec_allow=None, exec_path=None, mqtt_token="", allow_plaintext_key=False):
     args = args or {}
     if name == "rag_search":
         hits = rag_search(conn, args.get("query") or "", limit=int(args.get("limit") or 3))
@@ -195,11 +197,14 @@ def run_tool(name, args, conn, data_dir, mqtt_http="", queue=None, budget=None,
         req = urllib.request.Request(
             mqtt_http,
             data=payload,
-            headers={"Content-Type": "application/json", "Content-Length": str(len(payload))},
+            headers=dict({"Content-Type": "application/json",
+                          "Content-Length": str(len(payload))},
+                         **net.auth_header(mqtt_http, mqtt_token, allow_plaintext_key,
+                                          label="MQTT token")),
             method="POST",
         )
         try:
-            resp = urllib.request.urlopen(req, timeout=10)
+            resp = net.open_url(req, timeout=10)
             try:
                 body = resp.read(2048)
             finally:

@@ -24,6 +24,10 @@ const size_t kMaxExecOutput = 16 * 1024;
 struct ToolEnv {
   std::string data_dir;
   std::string mqtt_http;
+  // Optional bearer for the MQTT ingest URL; refused on plaintext http:// unless the
+  // operator opted in (allow_plaintext_key), same rule as the chat API key.
+  std::string mqtt_token;
+  bool allow_plaintext_key;
   // Colon-separated directories searched for an allowlisted command; empty means the
   // usual /bin:/usr/bin:/sbin:/usr/sbin:/usr/local/bin.
   std::string exec_path;
@@ -32,7 +36,7 @@ struct ToolEnv {
   // and a test can stub it.
   std::string (*rag_fn)(void* ctx, const std::string& query);
   void* rag_ctx;
-  ToolEnv() : rag_fn(0), rag_ctx(0) {}
+  ToolEnv() : allow_plaintext_key(false), rag_fn(0), rag_ctx(0) {}
 };
 
 // Accumulates what tools put into the conversation. Without a bound, a couple of tool

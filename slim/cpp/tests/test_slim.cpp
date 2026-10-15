@@ -310,6 +310,15 @@ static void test_json_helpers() {
         "join_url keeps existing /v1");
 }
 
+static void test_url_is_tls() {
+  std::cout << "-- url_is_tls (drives the credential policy)\n";
+  check(url_is_tls("https://host/v1"), "https is TLS");
+  check(url_is_tls("HTTPS://HOST/v1"), "scheme check is case-insensitive");
+  check(!url_is_tls("http://host/v1"), "http is not TLS");
+  check(!url_is_tls("https"), "a bare scheme word is not a URL");
+  check(!url_is_tls(""), "empty is not TLS");
+}
+
 static void test_format_skills() {
   std::cout << "-- format_skills (top-level .md, sorted, bounded)\n";
   std::string dir = tmpdir();
@@ -361,6 +370,7 @@ int main() {
   test_cap_prompt();
   test_retry();
   test_json_helpers();
+  test_url_is_tls();
   std::cout << "\n" << (g_checks - g_failures) << "/" << g_checks << " checks passed\n";
   if (g_failures) {
     std::cout << g_failures << " FAILED\n";

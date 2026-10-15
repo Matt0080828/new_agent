@@ -26,6 +26,7 @@ struct Cfg {
   std::string skills_dir;
   std::string docs_dir;
   std::string mqtt_http;
+  std::string mqtt_token;      // optional bearer for the MQTT ingest URL
   int max_tokens;
   int timeout;
   Policy policy;
@@ -36,6 +37,8 @@ struct Cfg {
   std::string session_file;  // <data_dir>/sessions/<name>.jsonl
   int history;               // --history N: how many turns to replay into the prompt
   bool dry_run_writes;       // --dry-run-writes: report planned writes, write nothing
+  std::string ca_file;       // CA bundle for https:// (--ca-file / SLIM_CA_FILE)
+  bool allow_plaintext_key;  // permit a bearer token over plaintext http://
 };
 
 static void die(const std::string& m, int c = 2) {
@@ -69,6 +72,11 @@ static std::string openai_chat(const Cfg& cfg, const std::string& url, const std
   }
   js << "]}";
   std::string endpoint = join_url(url, "/chat/completions");
+  // Refuse to put the key on plaintext http:// unless the operator opted in: a key on the
+  // wire is worse than no key at all.
+  if (!cfg.api_key.empty() && !url_is_tls(endpoint) && !cfg.allow_plaintext_key)
+    throw std::runtime_error("API key would go over plaintext http:// to " + endpoint +
+                             "; use https, or pass --allow-plaintext-key to accept the risk");
   HttpResult r;
   if (cfg.stream) {
     // Deltas go straight to stdout as they arrive; the assembled text comes back
@@ -244,6 +252,8 @@ static ToolEnv tool_env_from(const Cfg& cfg) {
   ToolEnv env;
   env.data_dir = cfg.data_dir;
   env.mqtt_http = cfg.mqtt_http;
+  env.mqtt_token = cfg.mqtt_token;
+  env.allow_plaintext_key = cfg.allow_plaintext_key;
   env.policy = cfg.policy;
   env.rag_fn = &agent_rag;
   env.rag_ctx = const_cast<Cfg*>(&cfg);
@@ -456,8 +466,12 @@ static void usage() {
             << "        <data-dir>/commands.allow may run (no shell - args go as-is; 10 s,\n"
             << "        16 KiB cap). --no-allow-exec or SLIM_ALLOW_EXEC=0 disables it; that file\n"
             << "        is not writable through a tool, so the model cannot widen its own list\n"
+            << "  tls: https:// is verified against --ca-file (SLIM_CA_FILE); a bearer token\n"
+            << "       is refused on plaintext http:// unless --allow-plaintext-key\n"
+            << "  mqtt: --mqtt-token / SLIM_MQTT_TOKEN adds a bearer to the ingest POST\n"
             << "env: SLIM_BASE_URL SLIM_FALLBACK_URL SLIM_MODEL SLIM_FALLBACK_MODEL\n"
             << "     SLIM_API_KEY SLIM_DATA_DIR SLIM_SKILLS_DIR SLIM_DOCS_DIR SLIM_MQTT_HTTP\n"
+            << "     SLIM_MQTT_TOKEN SLIM_CA_FILE SLIM_ALLOW_PLAINTEXT_KEY\n"
             << "     SLIM_ALLOW_WRITE SLIM_ALLOW_MQTT SLIM_ALLOW_EXEC\n";
 }
 
@@ -479,6 +493,9 @@ int main(int argc, char** argv) {
   cfg.skills_dir = env_or("SLIM_SKILLS_DIR", "./slim/skills");
   cfg.docs_dir = env_or("SLIM_DOCS_DIR", "./slim/docs");
   cfg.mqtt_http = env_or("SLIM_MQTT_HTTP", "");
+  cfg.mqtt_token = env_or("SLIM_MQTT_TOKEN", "");
+  cfg.ca_file = env_or("SLIM_CA_FILE", "/etc/ssl/certs/ca-certificates.crt");
+  cfg.allow_plaintext_key = env_or("SLIM_ALLOW_PLAINTEXT_KEY", "") == "1";
   cfg.policy.allow_write = env_or("SLIM_ALLOW_WRITE", "") == "1";
   cfg.policy.allow_mqtt = env_or("SLIM_ALLOW_MQTT", "") == "1";
   // Model-initiated execution is on by default; the scope is still only the bare names in
@@ -531,6 +548,12 @@ int main(int argc, char** argv) {
       need(cfg.docs_dir);
     else if (a == "--mqtt-http")
       need(cfg.mqtt_http);
+    else if (a == "--mqtt-token")
+      need(cfg.mqtt_token);
+    else if (a == "--ca-file")
+      need(cfg.ca_file);
+    else if (a == "--allow-plaintext-key")
+      cfg.allow_plaintext_key = true;
     else if (a == "--max-tokens") {
       std::string v;
       need(v);
@@ -578,6 +601,7 @@ int main(int argc, char** argv) {
       die("unknown arg " + a);
   }
   mkdir(cfg.data_dir.c_str(), 0755);
+  http_set_ca_file(cfg.ca_file);
   {
     std::string why;
     if (!valid_session_name(cfg.session, why))

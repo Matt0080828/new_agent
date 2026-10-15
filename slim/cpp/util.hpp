@@ -9,6 +9,10 @@ bool json_extract_string(const std::string& json, const std::string& key, std::s
 bool json_extract_object(const std::string& text, std::string& obj);
 bool json_get_string_field(const std::string& obj, const std::string& key, std::string& out);
 std::string join_url(const std::string& base, const std::string& suffix);
+// True when url uses the https:// scheme (case-insensitive). Drives the credential
+// policy: a bearer token is refused on anything that is not https unless the operator
+// explicitly accepts plaintext.
+bool url_is_tls(const std::string& url);
 // Suffix test that is safe for names shorter than the suffix (the previous
 // inline name.substr(name.size() - 4) underflowed and aborted the process).
 bool has_suffix(const std::string& s, const std::string& suffix);

@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+import net
 from error import SlimError
 from policy import approve_tool, load_allowlist
 from retry import DEFAULT_ATTEMPTS, DEFAULT_BASE_DELAY, DEFAULT_MAX_TOTAL, run_with_retry
@@ -83,7 +84,7 @@ def _post_once(url, data, headers, timeout):
     """One HTTP attempt. Raises the transport exception unchanged so the retry
     policy can classify it, rather than wrapping it in SlimError first."""
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    resp = urllib.request.urlopen(req, timeout=timeout)
+    resp = net.open_url(req, timeout=timeout)
     try:
         return resp.read(MAX_BODY + 1)
     finally:
@@ -92,7 +93,7 @@ def _post_once(url, data, headers, timeout):
 
 def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_MAX_TOKENS,
                     timeout=DEFAULT_TIMEOUT, retry_policy=None, log=None, stream=False,
-                    on_delta=None):
+                    on_delta=None, allow_plaintext_key=False):
     base = base_url.rstrip("/")
     if base.endswith("/v1"):
         url = base + "/chat/completions"
@@ -110,11 +111,12 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
         "Accept": "text/event-stream" if stream else "application/json",
         "Content-Length": str(len(data)),
     }
-    if api_key:
-        headers["Authorization"] = "Bearer " + api_key
+    # Refuses to put the key on plaintext http:// unless the operator opted in.
+    headers.update(net.auth_header(url, api_key, allow_plaintext_key, label="API key"))
     if stream:
         # Deltas reach on_delta as they arrive; the assembled text comes back here.
-        result = stream_completion(url, payload, api_key=api_key, headers=headers,
+        # The Authorization header (if any) already rides in `headers`.
+        result = stream_completion(url, payload, api_key=None, headers=headers,
                                    timeout=timeout, on_delta=on_delta,
                                    retry_policy=retry_policy, log=log)
         if result.error:
@@ -165,13 +167,14 @@ def chat_completion(base_url, model, messages, api_key=None, max_tokens=DEFAULT_
 
 
 def complete_with_fallback(primary, fallback, model, fallback_model, messages, api_key, max_tokens,
-                           timeout, retry_policy=None, log=None, stream=False, on_delta=None):
+                           timeout, retry_policy=None, log=None, stream=False, on_delta=None,
+                           allow_plaintext_key=False):
     # Each provider gets its own retry budget, so a fallback after an unreachable
     # primary is still attempted with the same transport policy.
     try:
         return chat_completion(primary, model, messages, api_key, max_tokens, timeout,
                                retry_policy=retry_policy, log=log, stream=stream,
-                               on_delta=on_delta)
+                               on_delta=on_delta, allow_plaintext_key=allow_plaintext_key)
     except SlimError:
         if not fallback:
             raise
@@ -243,6 +246,7 @@ def run_turn(user_text, cfg, conn):
         log=rlog,
         stream=streaming,
         on_delta=emit,
+        allow_plaintext_key=bool(cfg.get("allow_plaintext_key")),
     )
     parsed = parse_tool_call(reply)
     budget = ToolBudget()
@@ -258,7 +262,9 @@ def run_turn(user_text, cfg, conn):
                 result = run_tool(name, args, conn, cfg["data_dir"], cfg.get("mqtt_http") or "",
                                   queue=queue, budget=budget,
                                   exec_allow=(cfg.get("policy") or {}).get("exec_allow"),
-                                  exec_path=cfg.get("exec_path"))
+                                  exec_path=cfg.get("exec_path"),
+                                  mqtt_token=cfg.get("mqtt_token") or "",
+                                  allow_plaintext_key=bool(cfg.get("allow_plaintext_key")))
             except (ValueError, OSError) as exc:
                 result = "tool error: %s" % exc
         else:
@@ -279,6 +285,7 @@ def run_turn(user_text, cfg, conn):
             log=rlog,
             stream=streaming,
             on_delta=emit,
+            allow_plaintext_key=bool(cfg.get("allow_plaintext_key")),
         )
     _apply_changes(queue, budget)
     log_turn(conn, "user", user_text)
@@ -325,6 +332,11 @@ def _parse_args(argv):
     p.add_argument("--docs-dir", default=os.environ.get("SLIM_DOCS_DIR", os.path.join(HERE, "docs")))
     p.add_argument("--db", default=os.environ.get("SLIM_DB", ""))
     p.add_argument("--mqtt-http", default=os.environ.get("SLIM_MQTT_HTTP", ""))
+    p.add_argument("--mqtt-token", default=os.environ.get("SLIM_MQTT_TOKEN", ""),
+                   help="bearer token for the MQTT ingest URL (SLIM_MQTT_TOKEN)")
+    p.add_argument("--allow-plaintext-key", action="store_true",
+                   default=os.environ.get("SLIM_ALLOW_PLAINTEXT_KEY", "") == "1",
+                   help="permit a bearer token over plaintext http:// (default: refuse)")
     p.add_argument("--allow-write", action="store_true",
                    default=os.environ.get("SLIM_ALLOW_WRITE", "") == "1",
                    help="allow model-initiated write_file (default: denied)")
@@ -391,6 +403,8 @@ def build_cfg(args):
         "skills_dir": pick("skills_dir", args.skills_dir),
         "docs_dir": pick("docs_dir", args.docs_dir),
         "mqtt_http": pick("mqtt_http", args.mqtt_http),
+        "mqtt_token": pick("mqtt_token", args.mqtt_token),
+        "allow_plaintext_key": bool(args.allow_plaintext_key or file_cfg.get("allow_plaintext_key")),
         "db": args.db or os.path.join(data_dir, "slim.sqlite"),
         "policy": {
             "allow_write": bool(args.allow_write or file_cfg.get("allow_write")),

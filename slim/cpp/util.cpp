@@ -173,6 +173,19 @@ std::string join_url(const std::string& base, const std::string& suffix) {
   return b + "/v1" + suffix;
 }
 
+bool url_is_tls(const std::string& url) {
+  if (url.size() < 8)
+    return false;
+  for (size_t i = 0; i < 8; ++i) {
+    char c = url[i];
+    if (c >= 'A' && c <= 'Z')
+      c = (char)(c - 'A' + 'a');
+    if (c != "https://"[i])
+      return false;
+  }
+  return true;
+}
+
 bool jail_path(const std::string& root, const std::string& rel, std::string& full, std::string& err) {
   if (rel.empty() || rel[0] == '/') {
     err = "path must be relative and stay in data dir";

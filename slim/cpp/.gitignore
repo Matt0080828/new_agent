@@ -1,8 +1,16 @@
-# build outputs (host + T830 cross build + test binaries)
+# build outputs (host + T830 cross build + test binaries + opt-in TLS builds)
 slim-agent
 slim-agent-t830
 slim-agent-t830-static
+slim-agent-tls
+slim-agent-t830-tls
+slim-agent-t830-static-tls
 tests/test_slim
 tests/test_sse
 tests/test_session
 tests/test_tools
+tests/test_slim-tls
+tests/test_sse-tls
+tests/test_session-tls
+tests/test_tools-tls
+build/

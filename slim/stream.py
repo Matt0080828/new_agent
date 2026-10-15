@@ -14,6 +14,8 @@ import time
 import urllib.error
 import urllib.request
 
+import net
+
 from error import SlimError
 from retry import (DEFAULT_ATTEMPTS, DEFAULT_BASE_DELAY, DEFAULT_MAX_DELAY,
                    DEFAULT_MAX_TOTAL, is_retryable_exception,
@@ -103,7 +105,7 @@ def stream_completion(url, payload, api_key=None, headers=None, timeout=120,
     if headers:
         head.update(headers)
     if api_key:
-        head["Authorization"] = "Bearer " + api_key
+        head.update(net.auth_header(url, api_key))
 
     policy = retry_policy or {}
     attempts = max(1, int(policy.get("attempts", DEFAULT_ATTEMPTS)))
@@ -113,7 +115,7 @@ def stream_completion(url, payload, api_key=None, headers=None, timeout=120,
     started = clock()
     last_error = "stream failed"
     # Injectable seam: tests pass a fake opener instead of patching the urllib module.
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or net.open_url
 
     for i in range(1, attempts + 1):
         emitted = []

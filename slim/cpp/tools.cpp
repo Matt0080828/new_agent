@@ -188,6 +188,11 @@ std::string run_tool(const ToolEnv& env, const std::string& name, const std::str
   } else if (name == "mqtt_publish") {
     if (env.mqtt_http.empty())
       return "tool error: mqtt disabled; set SLIM_MQTT_HTTP";
+    // Same credential rule as the chat API key: no token over plaintext http:// unless
+    // the operator opted in.
+    if (!env.mqtt_token.empty() && !url_is_tls(env.mqtt_http) && !env.allow_plaintext_key)
+      return "tool error: the MQTT token would go over plaintext http://; use https or "
+             "--allow-plaintext-key";
     std::string topic, payload, why;
     json_get_string_field(obj, "topic", topic);
     json_get_string_field(obj, "payload", payload);
@@ -201,7 +206,7 @@ std::string run_tool(const ToolEnv& env, const std::string& name, const std::str
        << "\"}";
     // Deliberately single-shot: a publish is a mutation, and a retry after an ambiguous
     // failure can duplicate the effect. The C++ test counts requests on a local server.
-    HttpResult r = http_post_json(env.mqtt_http, js.str(), "", 10);
+    HttpResult r = http_post_json(env.mqtt_http, js.str(), env.mqtt_token, 10);
     if (!r.error.empty() && r.status == 0)
       return "tool error: " + r.error;
     result = "mqtt http " + r.body.substr(0, 200);
