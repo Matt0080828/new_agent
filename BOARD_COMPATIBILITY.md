@@ -11,8 +11,8 @@ footprint is:
 
 | Artifact | Size | Dependencies |
 | --- | --- | --- |
-| C++ client, static (aarch64 musl) | 719,144 bytes | none (`NEEDED 0`, stripped) |
-| C++ client, dynamic (aarch64 musl) | 142,352 bytes | musl loader + libstdc++ on the device |
+| C++ client, static (aarch64 musl) | 731,432 bytes | none (`NEEDED 0`, stripped) |
+| C++ client, dynamic (aarch64 musl) | 154,640 bytes | musl loader + libstdc++ on the device |
 | C++ client, host (`g++ -O2 -std=c++11`) | same sources | glibc (or the platform C++ runtime) |
 | Python client | sources | Python 3, standard library only (no pip packages) |
 

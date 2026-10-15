@@ -5,7 +5,9 @@ CORE = util.cpp policy.cpp http.cpp sse.cpp session.cpp tools.cpp
 BIN = slim-agent
 TESTS = tests/test_slim tests/test_sse tests/test_session tests/test_tools
 
-TC ?= /media/matt/D/public/fg370-t830-sdk_v1016/mtk_src/mtk/prebuilt/openwrt-toolchain/arm64-a55_neon-gcc-9.3.0_musl
+# Reference CPE toolchain. Override on the command line when it lives elsewhere:
+#   make t830-static TC=/path/to/arm64-a55_neon-gcc-9.3.0_musl
+TC ?= /media/matt_chang/D/public/fg370-t830-sdk_v1016/mtk_src/mtk/prebuilt/openwrt-toolchain/arm64-a55_neon-gcc-9.3.0_musl
 CROSS_CXX = $(TC)/bin/aarch64-openwrt-linux-musl-g++
 CROSS_BIN = slim-agent-t830
 CROSS_STATIC_BIN = slim-agent-t830-static

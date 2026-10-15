@@ -223,13 +223,13 @@ make -C slim/cpp test        # 89 + 54 + 51 + 63 = 257 checks in four binaries
 Reference CPE (OpenWrt musl gcc 9.3):
 
 ```bash
-make -C slim/cpp t830          # dynamic, stripped, 142,352 bytes (~139 KB)
-make -C slim/cpp t830-static   # self-contained, 719,144 bytes (~702 KB), no NEEDED libs
+make -C slim/cpp t830          # dynamic, stripped, 154,640 bytes (~151 KB)
+make -C slim/cpp t830-static   # self-contained, 731,432 bytes (~714 KB), no NEEDED libs
 file slim/cpp/slim-agent-t830-static
 # ELF aarch64, statically linked, stripped, interpreter-less
 ```
 
-The current tree builds to `sha256 1e365e37…` (static) - the same bytes that were run on
+The current tree builds to `sha256 fbb8beba…` (static) - the same bytes that were run on
 the device, so a rebuild can be compared with the verified build before deploying.
 
 Two artifacts on purpose. `slim-agent-t830` is the small one and needs
@@ -351,7 +351,7 @@ either (verified: `--help` from `/data/slim` exits 0).
 docker cp slim/cpp/slim-agent-t830-static adb-t830-run:/tmp/stage-binary
 docker exec adb-t830-run adb shell 'mkdir -p /data/slim/skills /data/slim/docs /data/slim/data &&
   cp /tmp/stage-binary /data/slim/slim-agent && chmod 755 /data/slim/slim-agent'
-docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still 1e365e37...
+docker exec adb-t830-run adb shell 'sha256sum /data/slim/slim-agent'    # still fbb8beba...
 docker exec adb-t830-run adb shell 'cd /data/slim && ./slim-agent --help | head -3'
 ```
 
