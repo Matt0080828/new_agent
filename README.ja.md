@@ -35,6 +35,22 @@ make -C slim/cpp t830-static    # 731,432 bytes、NEEDED 0、strip 済み。端�
 make -C slim/cpp t830-static-tls # +TLS: 1,419,848 bytes、NEEDED 0。TLS は任意（mbedTLS）。README.md の "Network security" 参照
 ```
 
+## マルチモデル（アドバイザー + アグリゲーター）
+
+client は回答前に他のモデルへ相談できます。各アドバイザーには 1 ターンにつき同じ質問が
+一度だけ渡され、その答えは advisory guidance として注入され、主モデル（アグリゲーター、
+`--model`）が統合して返答します。tool round では再相談しません。上限あり（アドバイザーは
+最大 4 個、各 256 tokens、各 800 文字まで保持）、fail-soft（到達不能または空の
+アドバイザーはスキップされ、そのターンはそのまま回答）、`SLIM_REFERENCE_MODELS` 未設定
+なら無効です：
+
+```bash
+export SLIM_REFERENCE_MODELS='[{"base_url":"http://10.0.0.9:8000/v1","model":"qwen2.5-7b"}]'
+```
+
+詳細な仕様はマニュアルを参照：
+[`slim/README.md`](slim/README.md#multi-model-advisors--aggregator)。
+
 ## CPE へ入れる
 
 ```bash

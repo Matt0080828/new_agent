@@ -33,6 +33,20 @@ make -C slim/cpp t830-static    # 731,432 bytes、NEEDED 0、已 strip；装置�
 make -C slim/cpp t830-static-tls # +TLS：1,419,848 bytes、NEEDED 0。TLS 为可选（mbedTLS），详见 README.md“Network security”
 ```
 
+## 多模型（顾问 + 聚合）
+
+client 可以先咨询其他模型再回答：每个顾问模型每轮只被问一次同样的问题，其答案会以
+advisory guidance 注入，由主模型（聚合者，`--model`）综合后产生回复。tool round 不会
+重复咨询。有界（最多 4 个顾问、各 256 tokens、各留 800 字）、fail-soft（连不上或空回的
+顾问会被跳过，该轮仍照常回答），且未设置 `SLIM_REFERENCE_MODELS` 时为关闭：
+
+```bash
+export SLIM_REFERENCE_MODELS='[{"base_url":"http://10.0.0.9:8000/v1","model":"qwen2.5-7b"}]'
+```
+
+完整规格见手册：
+[`slim/README.md`](slim/README.md#multi-model-advisors--aggregator)。
+
 ## 放到 CPE 上
 
 ```bash

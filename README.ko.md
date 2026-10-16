@@ -34,6 +34,21 @@ make -C slim/cpp t830-static    # 731,432 bytes, NEEDED 0, strip 완료; 기기�
 make -C slim/cpp t830-static-tls # +TLS: 1,419,848 bytes, NEEDED 0. TLS는 선택(mbedTLS). README.md "Network security" 참고
 ```
 
+## 멀티 모델(어드바이저 + 애그리게이터)
+
+client는 답변 전에 다른 모델에 자문할 수 있습니다. 각 어드바이저는 턴마다 같은 질문을
+한 번만 받고, 그 답은 advisory guidance로 주입되며, 주 모델(애그리게이터, `--model`)이
+종합해 응답합니다. tool round에서는 다시 자문하지 않습니다. 상한이 있고(어드바이저 최대
+4개, 각 256 tokens, 각 800자 보관), fail-soft이며(연결 불가 또는 빈 응답인 어드바이저는
+건너뛰고 그 턴은 그대로 답변), `SLIM_REFERENCE_MODELS`가 없으면 꺼져 있습니다:
+
+```bash
+export SLIM_REFERENCE_MODELS='[{"base_url":"http://10.0.0.9:8000/v1","model":"qwen2.5-7b"}]'
+```
+
+전체 규격은 매뉴얼 참고:
+[`slim/README.md`](slim/README.md#multi-model-advisors--aggregator)。
+
 ## CPE에 넣기
 
 ```bash

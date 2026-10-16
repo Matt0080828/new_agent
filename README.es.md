@@ -35,6 +35,23 @@ make -C slim/cpp t830-static    # 731,432 bytes, NEEDED 0, sin símbolos; no hay
 make -C slim/cpp t830-static-tls # +TLS: 1.419.848 bytes, NEEDED 0; TLS opcional (mbedTLS). Véase "Network security" en README.md
 ```
 
+## Varios modelos (asesores + agregador)
+
+El cliente puede consultar a otros modelos antes de responder: a cada asesor se le hace la
+misma pregunta una vez por turno, su respuesta se inyecta como orientación y el modelo
+principal (el agregador, `--model`) sintetiza la respuesta. La ronda de herramientas no
+vuelve a consultar. Está acotado (como máximo 4 asesores, 256 tokens cada uno, 800
+caracteres conservados), es tolerante a fallos (un asesor inalcanzable o vacío se omite y
+el turno responde igual) y está desactivado salvo que se defina
+`SLIM_REFERENCE_MODELS`:
+
+```bash
+export SLIM_REFERENCE_MODELS='[{"base_url":"http://10.0.0.9:8000/v1","model":"qwen2.5-7b"}]'
+```
+
+El contrato completo está en el manual:
+[`slim/README.md`](slim/README.md#multi-model-advisors--aggregator).
+
 ## Ponerlo en el CPE
 
 ```bash
