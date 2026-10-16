@@ -53,6 +53,20 @@ make -C slim/cpp t830-static-tls # +TLS：1,419,848 bytes、NEEDED 0。TLS 為�
 TLS 靜態 binary 約 1.42 MB，對比未含 TLS 的 731 KB——這是參考 CPE image 沒附的 TLS
 stack 的代價。
 
+## 多模型（顧問 + 整合）
+
+client 可以先諮詢其他模型再回答：每個顧問模型每輪只被問一次同樣的問題，其答案會以
+advisory guidance 注入，由主模型（整合者，`--model`）綜合後產生回覆。tool round 不會
+重複諮詢。有界（最多 4 個顧問、各 256 tokens、各留 800 字）、fail-soft（連不上或空回的
+顧問會被跳過，該輪仍照常回答），且未設 `SLIM_REFERENCE_MODELS` 時為關閉：
+
+```bash
+export SLIM_REFERENCE_MODELS='[{"base_url":"http://10.0.0.9:8000/v1","model":"qwen2.5-7b"}]'
+```
+
+完整規格見手冊：
+[`slim/README.md`](slim/README.md#multi-model-advisors--aggregator)。
+
 ## 放到 CPE 上
 
 ```bash
