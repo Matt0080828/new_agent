@@ -70,6 +70,22 @@ does protect:
 The TLS binary is ~1.42 MB static against 731 KB without it - the price of the
 dependency the reference CPE image does not ship.
 
+## Multiple models (advisors + aggregator)
+
+The client can consult other models before answering: each advisor is asked the same
+question once per turn, its answer is injected as advisory guidance, and the main model
+(the aggregator, `--model`) synthesizes the reply. The tool round does not re-consult. It
+is bounded (at most 4 advisors, 256 tokens each, 800 chars kept), fail-soft (an
+unreachable or empty advisor is skipped and the turn still answers) and off unless
+`SLIM_REFERENCE_MODELS` is set:
+
+```bash
+export SLIM_REFERENCE_MODELS='[{"base_url":"http://10.0.0.9:8000/v1","model":"qwen2.5-7b"}]'
+```
+
+The full contract is in the manual:
+[`slim/README.md`](slim/README.md#multi-model-advisors--aggregator).
+
 ## Put it on the CPE
 
 ```bash
