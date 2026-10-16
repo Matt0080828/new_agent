@@ -104,13 +104,16 @@ server가 요구하는 것은 `libstdc++.so.6`, `libgcc_s.so.1`, musl `libc`뿐�
 
 | 검증 항목 | CPE에서의 결과 |
 | --- | --- |
-| artifact 무결성 | `sha256 dfa81f00...`이 호스트와 기기에서 일치(`NEEDED 0`, strip 완료) |
+| artifact 무결성 | `sha256 b965c79c...`(t830-static, multi-model 포함)이 호스트와 기기에서 일치(`NEEDED 0`, strip 완료, 2026-10-16) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: 슬래시 명령 쓰기 후 읽어오기, session 저장소, `--dry-run-writes`가 아무것도 쓰지 않음, fail-closed 거부 모두 정상 |
 | LAN 경유 live model 턴 | 스트림 답변, 이어서 `--history 6`이 이전 턴의 숫자를 재현, `--history 0`은 재현하지 못함 — 음성 대조 |
 | **모델이 기기 자체에서 도는 경우** | loopback의 `llama-server` + 0.5B Q4: 4초에 `PONG!`, prompt 12 tok/s, 생성 7.9 tok/s, `/history`가 그 턴들을 재생, 주 엔드포인트가 죽어도 `--fallback-url`이 응답 |
+| **멀티 모델 어드바이저**(2026-10-16) | `SLIM_REFERENCE_MODELS`를 loopback의 `llama-server`로 지정(advisor와 aggregator 겸용): 한 턴 = **모델 호출 2회** — advisor 186 tok, aggregator 200 tok(차이 14가 주입된 guidance); advisor 2개 = 3회; advisor가 죽으면 `[slim] reference ... failed: connect failed`를 기록하고 그 턴은 그대로 응답 |
 | session 저장소 | `sessions/<name>.jsonl`, 모드 `0600`, 한 줄에 JSON 객체 하나 |
 | RAG 코퍼스, 재빌드 불필요 | `docs/`와 `skills/`에 넣은 markdown은 라이브로 검색됨: `/rag mt753x`, 다중 단어인 `/rag probe -22`, `/rag HotSpotFlag`, `/rag OWE` 모두 올바른 파일을 첫 번째로 반환 (2026-09-22) |
 | 모델 실패(HTTP 400) | `HTTP status 400: <서버 메시지>`를 보고하고 session 파일을 쓰지 않음 |
 
 이 트리를 다시 빌드하면 위와 **동일한** artifact가 나옵니다. 배포 전에 sha256을 비교하세요.
 검증 표 전체, 기기 실측 사실, 배포 스크립트는 `slim/README.md`와 `slim/deploy/`에 있습니다.
+멀티 모델 어드바이저 행은 2026-10-16에 `slim-agent-t830-static` `sha256 b965c79c03eb...`
+(OpenWrt 23.05.5, kernel 5.15.167)로 실측했습니다.

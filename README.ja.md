@@ -107,14 +107,16 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 
 | 確認項目 | CPE 上での結果 |
 | --- | --- |
-| artifact の同一性 | `sha256 dfa81f00...` がホストと端末で一致（`NEEDED 0`、strip 済み） |
+| artifact の同一性 | `sha256 b965c79c...`（t830-static、multi-model 込み）がホストと端末で一致（`NEEDED 0`、strip 済み、2026-10-16） |
 | `./slim/deploy/run-on-t830.sh` | exit 0：スラッシュコマンドの書き込みと読み戻し、session ストア、`--dry-run-writes` が何も書かないこと、fail-closed の拒否がすべて期待どおり |
 | LAN 経由の live model ターン | ストリーム回答、続いて `--history 6` が前のターンの数字を再現、`--history 0` では再現できない —— 負のコントロール |
 | **モデルが端末自身で動く場合** | loopback の `llama-server` + 0.5B Q4：4 秒で `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` がそれらのターンを再生、主エンドポイントが落ちても `--fallback-url` が回答 |
+| **マルチモデル・アドバイザー**（2026-10-16） | `SLIM_REFERENCE_MODELS` を loopback の `llama-server` に向ける（advisor と aggregator を兼ねる）：1 ターン = **モデル呼び出し 2 回** —— advisor 186 tok、aggregator 200 tok（差分 14 が注入された guidance）；advisor 2 個 = 3 回；advisor が死んでいると `[slim] reference ... failed: connect failed` を記録し、ターンはそのまま回答 |
 | session ストア | `sessions/<name>.jsonl`、モード `0600`、1 行 1 JSON オブジェクト |
 | RAG コーパス、再ビルド不要 | `docs/` と `skills/` に置いた markdown はそのまま検索対象になる: `/rag mt753x`、複数語の `/rag probe -22`、`/rag HotSpotFlag`、`/rag OWE` いずれも正しいファイルを先頭で返した（2026-09-22） |
 | モデル失敗（HTTP 400） | `HTTP status 400: <サーバーのメッセージ>` を報告し、session ファイルを書きません |
 
 このツリーを再ビルドすると上記と**同一の** artifact が得られます。配備前に sha256 を照合して
 ください。検証表の全文、実測した端末の事実、配備スクリプトは `slim/README.md` と
-`slim/deploy/` にあります。
+`slim/deploy/` にあります。マルチモデル・アドバイザーの行は 2026-10-16 に
+`slim-agent-t830-static` `sha256 b965c79c03eb...`（OpenWrt 23.05.5、kernel 5.15.167）で実測。

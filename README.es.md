@@ -106,14 +106,16 @@ determinista de dirigir acciones. Ambos pueden convivir por invocación, y `--fa
 
 | Comprobación | Resultado en el CPE |
 | --- | --- |
-| integridad del artefacto | `sha256 dfa81f00...` coincide en anfitrión y dispositivo (`NEEDED 0`, sin símbolos) |
+| integridad del artefacto | `sha256 b965c79c...` (t830-static, con multi-model) coincide en anfitrión y dispositivo (`NEEDED 0`, sin símbolos, 2026-10-16) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: comandos de barra con relectura, el almacén de sesiones, `--dry-run-writes` sin escribir nada y todos los rechazos fail-closed |
 | turno en vivo por la LAN | respuesta en streaming y después `--history 6` recordando el número del turno anterior; `--history 0` sin recordarlo — el control negativo |
 | **modelo en el propio dispositivo** | `llama-server` en loopback + un 0.5B Q4: `PONG!` en 4 s, 12 tok/s de prompt y 7,9 tok/s de generación, `/history` reproduciendo esos turnos y `--fallback-url` respondiendo con el endpoint principal caído |
+| **asesores multimodelo** (2026-10-16) | `SLIM_REFERENCE_MODELS` apuntando al `llama-server` de loopback (usado como asesor y agregador): un turno = **2 llamadas al modelo** — asesor 186 tok, agregador 200 tok (los 14 extra son el bloque de orientación inyectado); 2 asesores = 3 llamadas; un asesor muerto registra `[slim] reference ... failed: connect failed` y el turno responde igual |
 | almacén de sesiones | `sessions/<name>.jsonl`, modo `0600`, un objeto JSON por línea |
 | corpus RAG, sin reconstruir | los markdown colocados en `docs/` y `skills/` se buscan en vivo: `/rag mt753x`, la consulta de varias palabras `/rag probe -22`, `/rag HotSpotFlag` y `/rag OWE` devolvieron el archivo correcto primero (2026-09-22) |
 | modelo que falla (HTTP 400) | informa `HTTP status 400: <mensaje del servidor>` y no escribe archivo de sesión |
 
 Recompilar este árbol reproduce exactamente ese artefacto, así que compara el sha256 antes de desplegar.
 Las tablas completas de verificación, los datos medidos en el dispositivo y los scripts de despliegue están
-en `slim/README.md` y `slim/deploy/`.
+en `slim/README.md` y `slim/deploy/`. La fila de asesores multimodelo se verificó el 2026-10-16 con
+`slim-agent-t830-static` `sha256 b965c79c03eb...` (OpenWrt 23.05.5, kernel 5.15.167).
