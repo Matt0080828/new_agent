@@ -141,16 +141,18 @@ numbers, and the caveats.
 
 | Check | Result on the CPE |
 | --- | --- |
-| artifact integrity | `sha256 dfa81f00...` (non-TLS) / `4dcf7191...` (TLS) after the network-security work - re-run the on-device table below for the rebuilt binary |
+| artifact integrity | `sha256 b965c79c...` (non-TLS, `t830-static` with multi-model) / `4dcf7191...` (TLS), host vs device match (2026-10-16) |
 | `./slim/deploy/run-on-t830.sh` | exit 0: slash commands with read-back, the session store, `--dry-run-writes` writing nothing, every fail-closed refusal |
 | live model turn over the LAN | a streamed answer, then `--history 6` recalling the number from the earlier turn, then `--history 0` failing to - the negative control |
 | **model on the device itself** | `llama-server` on loopback + a 0.5B Q4: `PONG!` in 4 s, 12 tok/s prompt / 7.9 tok/s generation, `/history` replaying those turns, and `--fallback-url` answering through a dead primary |
+| **multi-model advisors** (2026-10-16) | `SLIM_REFERENCE_MODELS` pointing at the loopback `llama-server` (used as both advisor and aggregator): one turn = **2 model calls** - advisor 186 tok, aggregator 200 tok (the extra 14 is the injected guidance block); 2 advisors = 3 calls; a dead advisor logs `[slim] reference ... failed: connect failed` and the turn still answers |
 | session store | `sessions/<name>.jsonl`, mode `0600`, one JSON object per line |
 | RAG corpus, no rebuild | markdown dropped into `docs/` and `skills/` is searched live: `/rag mt753x`, the multi-word `/rag probe -22`, `/rag HotSpotFlag` and `/rag OWE` each returned the right file first (2026-09-22) |
 | failing model (HTTP 400) | reports `HTTP status 400: <server message>` and writes no session file |
 
 Those on-device results are the last verified run, from before the network-security work
-(P1-P4 + TLS). The current tree rebuilds to `sha256 dfa81f00...` (non-TLS) /
+(P1-P4 + TLS). The current tree rebuilds to `sha256 b965c79c...` (non-TLS) /
 `4dcf7191...` (TLS); re-run the table for the rebuilt binary before deploying. The full
 verified tables, the measured device facts, and the deploy scripts are in
-`slim/README.md` and `slim/deploy/`.
+`slim/README.md` and `slim/deploy/`. The multi-model advisor row was verified 2026-10-16
+against `slim-agent-t830-static` `sha256 b965c79c03eb...` (OpenWrt 23.05.5, kernel 5.15.167).

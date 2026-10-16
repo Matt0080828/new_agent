@@ -115,13 +115,15 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 
 | 檢查項目 | CPE 上的結果 |
 | --- | --- |
-| artifact 完整性 | `sha256 dfa81f00...` 在主機與裝置兩邊一致（`NEEDED 0`、已 strip） |
+| artifact 完整性 | `sha256 b965c79c...`（t830-static，含 multi-model）在主機與裝置兩邊一致（`NEEDED 0`、已 strip，2026-10-16） |
 | `./slim/deploy/run-on-t830.sh` | exit 0：斜線指令寫入後讀回、session 儲存、`--dry-run-writes` 確實沒寫檔、每一項 fail-closed 拒絕都正確 |
 | 走 LAN 的 live model 回合 | 串流回答；接著 `--history 6` 重播並答出前一回合的數字；`--history 0` 則答不出來 —— 負向對照 |
 | **模型跑在裝置自己身上** | loopback 上的 `llama-server` + 0.5B Q4：4 秒回 `PONG!`、prompt 12 tok/s、生成 7.9 tok/s、`/history` 能重播那些回合，且 `--fallback-url` 在主端點壞掉時仍能作答 |
+| **多模型顧問（advisor）**（2026-10-16） | `SLIM_REFERENCE_MODELS` 指向 loopback 的 `llama-server`（同時當 advisor 與 aggregator）：一輪 = **2 次模型呼叫** —— advisor 186 tok、aggregator 200 tok（多出的 14 就是注入的 guidance）；2 個顧問 = 3 次呼叫；顧問掛掉時記錄 `[slim] reference ... failed: connect failed`，該輪仍照常作答 |
 | session 儲存 | `sessions/<name>.jsonl`、權限 `0600`、一行一個 JSON 物件 |
 | RAG 語料，不需重 build | 放進 `docs/` 與 `skills/` 的 markdown 會被即時搜到：`/rag mt753x`、多詞的 `/rag probe -22`、`/rag HotSpotFlag` 與 `/rag OWE` 都把對的檔案排在第一（2026-09-22） |
 | 模型失敗（HTTP 400） | 回報 `HTTP status 400: <伺服器訊息>`，且不寫入 session 檔 |
 
 重新建置這棵樹會產生與上面**完全相同**的 artifact，所以部署前請比對 sha256。完整的驗證表格、
-裝置實測數據與部署腳本都在 `slim/README.md` 與 `slim/deploy/`。
+裝置實測數據與部署腳本都在 `slim/README.md` 與 `slim/deploy/`。多模型顧問那一列為 2026-10-16
+以 `slim-agent-t830-static` `sha256 b965c79c03eb...`（OpenWrt 23.05.5, kernel 5.15.167）實測。
