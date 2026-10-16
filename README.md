@@ -24,9 +24,9 @@ BOARD_COMPATIBILITY.md  which development boards run it, and where the model has
 ## Build and test on the host
 
 ```bash
-cd slim/cpp && make && make test                              # 94 + 54 + 51 + 64 = 263 checks
+cd slim/cpp && make && make test                              # 101 + 54 + 51 + 64 = 270 checks
 cd slim/cpp && make tls && make tls-test                       # the same, with TLS compiled in
-cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 114 tests, standard library only
+cd slim && python3 -m unittest discover -s . -p 'test_*.py'    # 117 tests, standard library only
 ```
 
 ## Build for the CPE
