@@ -195,6 +195,51 @@ class SlimAgentTests(unittest.TestCase):
         self.assertIn(b"CAP-RE mesh", self.httpd.last_body, "the memory fact is in the system prompt")
         conn.close()
 
+    def test_parse_reference_env(self):
+        # Valid entries survive (api_key optional); malformed ones are dropped, not fatal.
+        refs = agent.parse_reference_env(
+            '[{"base_url":"http://a/v1","model":"m1"},'
+            '{"base_url":"","model":"m2"},{"model":"m3"},"nope"'
+            ',{"base_url":"http://b/v1","model":"m4","api_key":"k"}]')
+        self.assertEqual([r["model"] for r in refs], ["m1", "m4"])
+        self.assertEqual(refs[1]["api_key"], "k")
+        self.assertEqual(agent.parse_reference_env("{not json"), [])
+        self.assertEqual(agent.normalize_references("nope"), [])
+
+    def test_references_are_consulted_and_injected(self):
+        # One advisor call, then the aggregator: the advisor's text must land in the
+        # aggregator's system prompt as guidance.
+        refs = json.dumps([{"base_url": self.url, "model": "tiny"}])
+        args = agent._parse_args(["--base-url", self.url, "--model", "tiny",
+                                  "--data-dir", self.td, "--timeout", "5",
+                                  "--reference-models", refs])
+        cfg = agent.build_cfg(args)
+        import rag
+
+        conn = rag.connect(cfg["db"])
+        reply = agent.run_turn("hello", cfg, conn)
+        self.assertEqual(reply, "pong")
+        self.assertEqual(self.httpd.n, 2, "one advisor call + one aggregator call")
+        self.assertIn(b"Reference answers from other models", self.httpd.last_body,
+                      "the advisor output is injected into the aggregator prompt")
+        conn.close()
+
+    def test_failed_reference_is_skipped(self):
+        # An unreachable advisor must not fail the turn (attempts=1 keeps it fast).
+        refs = json.dumps([{"base_url": "http://127.0.0.1:1/v1", "model": "dead"}])
+        args = agent._parse_args(["--base-url", self.url, "--model", "tiny",
+                                  "--data-dir", self.td, "--timeout", "2",
+                                  "--attempts", "1", "--reference-models", refs])
+        cfg = agent.build_cfg(args)
+        import rag
+
+        conn = rag.connect(cfg["db"])
+        reply = agent.run_turn("hello", cfg, conn)
+        self.assertEqual(reply, "pong")
+        self.assertEqual(self.httpd.n, 1, "only the aggregator was reached")
+        self.assertNotIn(b"Reference answers", self.httpd.last_body)
+        conn.close()
+
     def test_chat_error_raises(self):
         with self.assertRaises(SlimError):
             agent.chat_completion("http://127.0.0.1:1", "tiny", [{"role": "user", "content": "x"}], timeout=1)

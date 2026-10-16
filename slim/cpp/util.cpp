@@ -164,6 +164,74 @@ bool json_get_string_field(const std::string& obj, const std::string& key, std::
   return json_extract_string(obj, key, out);
 }
 
+bool json_extract_array_objects(const std::string& json, const std::string& key,
+                                std::vector<std::string>& out) {
+  out.clear();
+  std::string::size_type i = 0;
+  if (!key.empty()) {
+    std::string pat = "\"" + key + "\"";
+    std::string::size_type p = json.find(pat);
+    if (p == std::string::npos)
+      return false;
+    i = p + pat.size();
+    while (i < json.size() && json[i] != ':')
+      ++i;
+    if (i == json.size())
+      return false;
+    ++i;
+  }
+  while (i < json.size() && (json[i] == ' ' || json[i] == '\t' || json[i] == '\n' || json[i] == '\r'))
+    ++i;
+  if (i >= json.size() || json[i] != '[')
+    return false;
+  ++i;
+  bool in_str = false;
+  bool esc = false;
+  int depth = 0;
+  std::string cur;
+  for (; i < json.size(); ++i) {
+    char c = json[i];
+    if (in_str) {
+      if (depth > 0)
+        cur.push_back(c);
+      if (esc)
+        esc = false;
+      else if (c == '\\')
+        esc = true;
+      else if (c == '"')
+        in_str = false;
+      continue;
+    }
+    if (c == '"') {
+      in_str = true;
+      if (depth > 0)
+        cur.push_back(c);
+      continue;
+    }
+    if (c == '{') {
+      if (depth == 0)
+        cur.clear();
+      cur.push_back(c);
+      ++depth;
+      continue;
+    }
+    if (c == '}') {
+      if (depth > 0) {
+        cur.push_back(c);
+        --depth;
+        if (depth == 0)
+          out.push_back(cur);
+      }
+      continue;
+    }
+    if (c == ']' && depth == 0)
+      break;
+    if (depth > 0)
+      cur.push_back(c);
+  }
+  return true;
+}
+
 std::string join_url(const std::string& base, const std::string& suffix) {
   std::string b = base;
   while (!b.empty() && b[b.size() - 1] == '/')

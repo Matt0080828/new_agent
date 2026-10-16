@@ -7,6 +7,11 @@
 std::string json_escape(const std::string& s);
 bool json_extract_string(const std::string& json, const std::string& key, std::string& out);
 bool json_extract_object(const std::string& text, std::string& obj);
+// Collect the top-level object substrings ("{...}") of the JSON array stored under `key`
+// (an empty key means "the first array in the text"). A tiny scanner - not a general JSON
+// parser - used for SLIM_REFERENCE_MODELS. Returns false when the key/array is absent.
+bool json_extract_array_objects(const std::string& json, const std::string& key,
+                                std::vector<std::string>& out);
 bool json_get_string_field(const std::string& obj, const std::string& key, std::string& out);
 std::string join_url(const std::string& base, const std::string& suffix);
 // True when url uses the https:// scheme (case-insensitive). Drives the credential

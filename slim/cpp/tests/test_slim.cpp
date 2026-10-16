@@ -308,6 +308,30 @@ static void test_json_helpers() {
         "join_url appends /v1");
   check(join_url("http://host:1234/v1/", "/chat/completions") == "http://host:1234/v1/chat/completions",
         "join_url keeps existing /v1");
+
+  std::vector<std::string> objs;
+  check(json_extract_array_objects(
+            "[{\"base_url\":\"http://a/v1\",\"model\":\"m1\"},"
+            "{\"base_url\":\"http://b/v1\",\"model\":\"m2\",\"api_key\":\"k\"}]",
+            "", objs) && objs.size() == 2,
+        "json_extract_array_objects reads a top-level array");
+  if (objs.size() == 2) {
+    std::string b, m, k2;
+    json_get_string_field(objs[0], "base_url", b);
+    json_get_string_field(objs[0], "model", m);
+    check(b == "http://a/v1" && m == "m1", "first reference object fields parse");
+    json_get_string_field(objs[1], "api_key", k2);
+    check(k2 == "k", "api_key parses from the second reference object");
+  }
+  check(json_extract_array_objects("{\"reference_models\":[{\"model\":\"m\"}]}",
+                                   "reference_models", objs) && objs.size() == 1,
+        "json_extract_array_objects reads an array under a key");
+  check(!json_extract_array_objects("{\"x\":1}", "reference_models", objs),
+        "a missing key returns false");
+  check(!json_extract_array_objects("[]", "reference_models", objs),
+        "an array without the key returns false when one is required");
+  check(json_extract_array_objects("[]", "", objs) && objs.empty(),
+        "an empty top-level array is valid and yields no objects");
 }
 
 static void test_url_is_tls() {

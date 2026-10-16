@@ -33,6 +33,18 @@ DEFAULT_HISTORY = 6
 MAX_BODY = 256 * 1024
 MAX_PROMPT_CHARS = 6000
 
+# Multi-model (Mixture-of-Agents-lite): optional reference models advise once per user
+# turn, then the main model (the aggregator) synthesizes the final answer. Bounded so a
+# cheap CPE turn cannot turn into N expensive ones.
+MAX_REFERENCES = 4
+MAX_REFERENCE_TOKENS = 256
+MAX_REFERENCE_CHARS = 800
+ADVISOR_SYSTEM = (
+    "You are one of several expert models consulted before a final answer is written. "
+    "Answer the user's latest message directly and concisely: key facts, corrections, or "
+    "a short draft. Do not emit tool calls, JSON, or role labels. Plain text only."
+)
+
 
 def _die(msg, code=2):
     sys.stderr.write(msg + "\n")
@@ -183,6 +195,81 @@ def complete_with_fallback(primary, fallback, model, fallback_model, messages, a
                                on_delta=on_delta)
 
 
+def normalize_references(raw):
+    """Validate a list of reference-model entries. Each needs base_url + model; api_key
+    is optional. Anything malformed is dropped (a bad reference must never take down the
+    turn) and the list is capped at MAX_REFERENCES."""
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        base = str(item.get("base_url") or "").strip()
+        model = str(item.get("model") or "").strip()
+        if not base or not model:
+            continue
+        ref = {"base_url": base, "model": model}
+        key = item.get("api_key")
+        if key:
+            ref["api_key"] = str(key)
+        out.append(ref)
+        if len(out) >= MAX_REFERENCES:
+            break
+    return out
+
+
+def parse_reference_env(raw):
+    """SLIM_REFERENCE_MODELS: a JSON array of {base_url, model, api_key?}. A malformed
+    value is reported and ignored (fail closed: no references), never fatal."""
+    if not raw:
+        return []
+    try:
+        return normalize_references(json.loads(raw))
+    except ValueError as exc:
+        sys.stderr.write("[slim] SLIM_REFERENCE_MODELS ignored (invalid JSON: %s)\n" % exc)
+        return []
+
+
+def _reference_label(ref, idx):
+    return ref.get("model") or ("ref%d" % (idx + 1))
+
+
+def consult_references(refs, convo, cfg, log):
+    """Ask each reference model for its take before the aggregator answers. A reference
+    that fails is skipped and logged: it advises, so its failure must not fail the turn.
+    Returns [(label, text)] in config order."""
+    opinions = []
+    max_tokens = min(int(cfg["max_tokens"]), MAX_REFERENCE_TOKENS)
+    for i, ref in enumerate(refs):
+        messages = [{"role": "system", "content": ADVISOR_SYSTEM}] + list(convo)
+        try:
+            text = chat_completion(
+                ref["base_url"], ref["model"], messages,
+                ref.get("api_key") or cfg.get("api_key") or None,
+                max_tokens, cfg["timeout"],
+                retry_policy=cfg.get("retry") or {}, log=log,
+                allow_plaintext_key=bool(cfg.get("allow_plaintext_key")),
+            )
+        except SlimError as exc:
+            sys.stderr.write("[slim] reference %s failed: %s\n" % (_reference_label(ref, i), exc))
+            continue
+        text = (text or "").strip()
+        if text:
+            opinions.append((_reference_label(ref, i), text[:MAX_REFERENCE_CHARS]))
+    return opinions
+
+
+def reference_guidance(opinions):
+    """The block injected into the aggregator's system prompt. Empty when no reference
+    produced anything, so an all-failed consultation changes nothing."""
+    if not opinions:
+        return ""
+    return ("Reference answers from other models (advisory; synthesize the best final "
+            "answer and correct any errors):\n"
+            + "\n".join("[%s] %s" % (label, text) for label, text in opinions))
+
+
 def _trim(messages):
     out = list(messages)
     while out and sum(len(m.get("content") or "") for m in out) > MAX_PROMPT_CHARS:
@@ -233,6 +320,16 @@ def run_turn(user_text, cfg, conn):
         blob = json.dumps(hits, ensure_ascii=False)
         messages.insert(1, {"role": "system", "content": "RAG hits: " + blob})
     messages = _trim(messages)
+    refs = cfg.get("references") or []
+    if refs:
+        # One consultation per user turn, before the aggregator's first completion. The
+        # advisors see the RAG hits + history + question (without the tool-oriented main
+        # system prompt), framed as advisors; their take is appended to the system prompt
+        # so the aggregator synthesizes. A later tool round does NOT re-consult.
+        adv = [m for i, m in enumerate(messages) if not (i == 0 and m.get("role") == "system")]
+        guidance = reference_guidance(consult_references(refs, adv, cfg, rlog))
+        if guidance:
+            messages[0]["content"] = (messages[0].get("content") or "") + "\n\n" + guidance
     reply = complete_with_fallback(
         cfg["base_url"],
         cfg.get("fallback_url") or "",
@@ -324,6 +421,9 @@ def _parse_args(argv):
     p.add_argument("--fallback-url", default=os.environ.get("SLIM_FALLBACK_URL", ""))
     p.add_argument("--model", default=os.environ.get("SLIM_MODEL", ""))
     p.add_argument("--fallback-model", default=os.environ.get("SLIM_FALLBACK_MODEL", ""))
+    p.add_argument("--reference-models", default=os.environ.get("SLIM_REFERENCE_MODELS", ""),
+                   help="JSON array of advisor models [{base_url, model, api_key?}] consulted "
+                        "before the main model answers (SLIM_REFERENCE_MODELS)")
     p.add_argument("--api-key", default=os.environ.get("SLIM_API_KEY", ""))
     p.add_argument("--max-tokens", type=int, default=int(os.environ.get("SLIM_MAX_TOKENS", DEFAULT_MAX_TOKENS)))
     p.add_argument("--timeout", type=int, default=int(os.environ.get("SLIM_TIMEOUT", DEFAULT_TIMEOUT)))
@@ -396,6 +496,10 @@ def build_cfg(args):
         "fallback_url": pick("fallback_url", args.fallback_url),
         "model": pick("model", args.model),
         "fallback_model": pick("fallback_model", args.fallback_model),
+        # Advisors from --reference-models/SLIM_REFERENCE_MODELS (a JSON array) or the
+        # config file's "reference_models". The main model stays the aggregator.
+        "references": (parse_reference_env(args.reference_models)
+                       or normalize_references(file_cfg.get("reference_models"))),
         "api_key": pick("api_key", args.api_key),
         "max_tokens": args.max_tokens,
         "timeout": args.timeout,

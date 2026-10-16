@@ -26,10 +26,10 @@ python3 -S slim/agent.py --ingest-only
 python3 -S slim/agent.py --base-url http://127.0.0.1:8080/v1 --model tiny --once 'what is this device'
 ```
 
-Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_DB`, `SLIM_DRY_RUN_WRITES`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_STREAM`, `SLIM_SESSION`, `SLIM_HISTORY`, `SLIM_CONFIG`.
+Env: `SLIM_BASE_URL`, `SLIM_FALLBACK_URL`, `SLIM_MODEL`, `SLIM_FALLBACK_MODEL`, `SLIM_API_KEY`, `SLIM_MAX_TOKENS`, `SLIM_TIMEOUT`, `SLIM_DATA_DIR`, `SLIM_SKILLS_DIR`, `SLIM_DOCS_DIR`, `SLIM_MQTT_HTTP`, `SLIM_ALLOW_WRITE`, `SLIM_ALLOW_MQTT`, `SLIM_DB`, `SLIM_DRY_RUN_WRITES`, `SLIM_ATTEMPTS`, `SLIM_RETRY_BASE_MS`, `SLIM_RETRY_MAX_TOTAL_S`, `SLIM_HTTP_VERBOSE`, `SLIM_STREAM`, `SLIM_SESSION`, `SLIM_HISTORY`, `SLIM_REFERENCE_MODELS`, `SLIM_CONFIG`.
 
 Optional JSON `--config`:
-`base_url`, `fallback_url`, `model`, `fallback_model`, `data_dir`, `skills_dir`, `docs_dir`, `mqtt_http`, `allow_write`, `allow_mqtt`.
+`base_url`, `fallback_url`, `model`, `fallback_model`, `reference_models`, `data_dir`, `skills_dir`, `docs_dir`, `mqtt_http`, `allow_write`, `allow_mqtt`.
 
 ## Fail-closed tool policy
 
@@ -83,6 +83,34 @@ in a harmful way:
 
 Each provider in the fallback chain gets its own retry budget, so a fallback after
 an unreachable primary is still attempted under the same policy.
+
+## Multi-model (advisors + aggregator)
+
+Both clients can consult other models before answering, so several models contribute and
+one synthesizes the reply the operator sees. The main model (`--model`) is the
+**aggregator**; the **advisors** are a JSON list in `SLIM_REFERENCE_MODELS` (the shared
+surface for both clients; the Python client also accepts `--reference-models` and a
+`reference_models` key in `--config`):
+
+```bash
+export SLIM_REFERENCE_MODELS='[{"base_url":"http://10.0.0.9:8000/v1","model":"qwen2.5-7b"},
+                               {"base_url":"https://api.example.com/v1","model":"gpt-x","api_key":"..."}]'
+python3 -S slim/agent.py --base-url http://127.0.0.1:8080/v1 --model tiny --once 'is the mesh up?'
+```
+
+Per user turn, once (never on the tool round): each advisor is asked the same question,
+its answer is injected into the aggregator's prompt as advisory guidance, and the
+aggregator produces the final answer (it may still call tools, and a later tool round does
+not re-consult). Rules:
+
+- **Bounded**: at most 4 advisors, 256 tokens each, 800 chars of each answer kept — a CPE
+  turn must not become N expensive ones.
+- **Fail-soft**: an advisor that is unreachable, errors, or returns nothing is logged
+  (`[slim] reference <model> failed: ...`) and skipped; the turn still answers. An
+  all-failed consultation changes nothing.
+- **Advisors never stream** and are never failed over; each is its own endpoint. A bad
+  `SLIM_REFERENCE_MODELS` value is reported and ignored (no references), never fatal.
+- Unset (the default) means the previous single-model behaviour, byte for byte.
 
 ## Streaming (`--stream`)
 

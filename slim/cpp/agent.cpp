@@ -15,6 +15,22 @@
 #include <vector>
 
 static const size_t kMaxPrompt = 6000;
+// Multi-model (Mixture-of-Agents-lite): optional advisor models answer once per user
+// turn; the main model is the aggregator that synthesizes the final answer. Bounded so a
+// cheap CPE turn cannot become N expensive ones.
+static const size_t kRefMaxChars = 800;
+static const int kRefMaxTokens = 256;
+static const size_t kMaxReferences = 4;
+static const char* kAdvisorSystem =
+    "You are one of several expert models consulted before a final answer is written. "
+    "Answer the user's latest message directly and concisely: key facts, corrections, or "
+    "a short draft. Do not emit tool calls, JSON, or role labels. Plain text only.";
+
+struct Reference {
+  std::string base_url;
+  std::string model;
+  std::string api_key;
+};
 
 struct Cfg {
   std::string base_url;
@@ -22,6 +38,7 @@ struct Cfg {
   std::string model;
   std::string fallback_model;
   std::string api_key;
+  std::vector<Reference> references;  // advisor models (SLIM_REFERENCE_MODELS)
   std::string data_dir;
   std::string skills_dir;
   std::string docs_dir;
@@ -123,6 +140,53 @@ static std::string chat_fallback(const Cfg& cfg, const std::vector<std::pair<std
       throw;
     return openai_chat(cfg, cfg.fallback_url, cfg.fallback_model.empty() ? cfg.model : cfg.fallback_model, msgs);
   }
+}
+
+// Consult the advisor models once and return the guidance block to prepend to the
+// aggregator's prompt. An advisor that fails is logged and skipped: it advises, so its
+// failure must not fail the turn.
+static std::string reference_guidance(
+    const Cfg& cfg, const std::vector<std::pair<std::string, std::string> >& msgs) {
+  if (cfg.references.empty())
+    return "";
+  std::ostringstream out;
+  int used = 0;
+  for (size_t i = 0; i < cfg.references.size(); ++i) {
+    const Reference& ref = cfg.references[i];
+    Cfg rc = cfg;
+    rc.base_url = ref.base_url;
+    rc.model = ref.model;
+    if (!ref.api_key.empty())
+      rc.api_key = ref.api_key;
+    rc.stream = false;        // advisors never stream to the operator's stdout
+    rc.fallback_url.clear();  // a reference is skipped, not failed over
+    rc.max_tokens = cfg.max_tokens < kRefMaxTokens ? cfg.max_tokens : kRefMaxTokens;
+    std::vector<std::pair<std::string, std::string> > amsgs;
+    amsgs.push_back(std::make_pair(std::string("system"), std::string(kAdvisorSystem)));
+    for (size_t j = 0; j < msgs.size(); ++j)
+      amsgs.push_back(msgs[j]);
+    std::string text;
+    try {
+      text = openai_chat(rc, rc.base_url, rc.model, amsgs);
+    } catch (const std::exception& e) {
+      std::cerr << "[slim] reference " << (ref.model.empty() ? "?" : ref.model)
+                << " failed: " << e.what() << "\n";
+      continue;
+    }
+    while (!text.empty() && (text[text.size() - 1] == '\n' || text[text.size() - 1] == ' ' ||
+                             text[text.size() - 1] == '\r' || text[text.size() - 1] == '\t'))
+      text.resize(text.size() - 1);
+    if (text.empty())
+      continue;
+    if (text.size() > kRefMaxChars)
+      text = text.substr(0, kRefMaxChars) + "...";
+    out << "[" << (ref.model.empty() ? "?" : ref.model) << "] " << text << "\n";
+    ++used;
+  }
+  if (!used)
+    return "";
+  return std::string("Reference answers from other models (advisory; synthesize the best "
+                     "final answer and correct any errors):\n") + out.str();
 }
 
 // Model tool calls exist again, but a turn still runs at most one tool round, so there is
@@ -394,8 +458,16 @@ static std::string run_turn(const Cfg& cfg, const std::string& user) {
       context += "\n";
     context += "Long-term memory (facts that survive sessions; the operator appends with /remember):\n" + memory;
   }
-  msgs.push_back(std::make_pair(std::string("user"),
-                                tool_hint + context + "\n" + "Q: " + cap_prompt(u, kMaxPrompt) + "\nA:"));
+  std::string user_prompt = tool_hint + context + "\n" + "Q: " + cap_prompt(u, kMaxPrompt) + "\nA:";
+  msgs.push_back(std::make_pair(std::string("user"), user_prompt));
+  if (!cfg.references.empty()) {
+    // One consultation per user turn, before the aggregator's first completion. The
+    // advisors see the same conversation; their take is prepended to the question so the
+    // aggregator synthesizes. A later tool round does NOT re-consult.
+    std::string guidance = reference_guidance(cfg, msgs);
+    if (!guidance.empty())
+      msgs[msgs.size() - 1].second = guidance + "\n" + msgs[msgs.size() - 1].second;
+  }
   std::string reply = chat_fallback(cfg, msgs);
   // One bounded tool round: if the model answered with a tool call, run it as a
   // model-initiated call - every gate applies (policy flags, the allowlist, the
@@ -454,6 +526,9 @@ static void usage() {
             << "  skills: *.md in --skills-dir is injected into the prompt; /rag also searches it\n"
             << "          and the session history\n"
             << "  stream: --stream prints tokens as they arrive (SLIM_STREAM=1)\n"
+            << "  multi-model: SLIM_REFERENCE_MODELS='[{\"base_url\":URL,\"model\":ID},...]'\n"
+            << "               consults each advisor once per turn, then the main model\n"
+            << "               synthesizes the final answer (advisors that fail are skipped)\n"
             << "  session: --session NAME --history N (default 6; 0 replays nothing, -1 all)\n"
             << "  retry: --attempts N --retry-base-ms MS (default 3 x 500ms, capped 4000ms)\n"
             << "         retries transport errors, 429 and 5xx; mutations are never retried\n"
@@ -488,6 +563,24 @@ int main(int argc, char** argv) {
   cfg.fallback_url = env_or("SLIM_FALLBACK_URL", "");
   cfg.model = env_or("SLIM_MODEL", "");
   cfg.fallback_model = env_or("SLIM_FALLBACK_MODEL", "");
+  // Advisors: SLIM_REFERENCE_MODELS is a JSON array of {base_url, model, api_key?}. A
+  // malformed value is ignored (no references), never fatal; the main model stays the
+  // aggregator. Both clients read the same env var.
+  {
+    std::string raw = env_or("SLIM_REFERENCE_MODELS", "");
+    std::vector<std::string> objs;
+    if (!raw.empty() && json_extract_array_objects(raw, "", objs)) {
+      for (size_t i = 0; i < objs.size() && cfg.references.size() < kMaxReferences; ++i) {
+        Reference ref;
+        json_get_string_field(objs[i], "base_url", ref.base_url);
+        json_get_string_field(objs[i], "model", ref.model);
+        json_get_string_field(objs[i], "api_key", ref.api_key);
+        if (ref.base_url.empty() || ref.model.empty())
+          continue;
+        cfg.references.push_back(ref);
+      }
+    }
+  }
   cfg.api_key = env_or("SLIM_API_KEY", "");
   cfg.data_dir = env_or("SLIM_DATA_DIR", "./slim/data");
   cfg.skills_dir = env_or("SLIM_SKILLS_DIR", "./slim/skills");
