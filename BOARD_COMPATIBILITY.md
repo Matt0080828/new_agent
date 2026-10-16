@@ -104,6 +104,25 @@ endpoint).
    sessions, the command allowlist and the RAG corpus live there, and `/tmp`
    is tmpfs on the reference device.
 
+### Raspberry Pi 2, concretely
+
+The plainest case of "any other Linux": the board's own compiler, no cross
+toolchain (verified 2026-10-16 on a Raspberry Pi 2 Model B, armv7l, glibc 2.41,
+921 MiB RAM).
+
+```bash
+git clone https://github.com/Matt0080828/new_agent.git
+cd new_agent/slim/cpp && make host   # 104 s -> 225,072 bytes, 270 checks with `make test`
+cd .. && python3 -m unittest discover -s . -p 'test_*.py'   # 117 tests
+./cpp/slim-agent --data-dir ~/slim-data --once '/history'    # bare agent, no model
+```
+
+Then pick a mode: Mode B is `--base-url http://<lan-host>:1234/v1` (3 s per turn
+against an LM Studio on the LAN - load the model there first, a server that has
+to load on demand answers with an HTTP error); Mode A is a `llama-server` on
+loopback with a 0.5B Q4 (~50 s per turn, agent peak RSS 9.2 MiB). Keep the data
+directory on the SD card, not `/tmp`. `README.md` carries the full recipe.
+
 ## Caveats
 
 - All RAM figures are Q4-family. FP16 and Q8 multiply them by 2-4.

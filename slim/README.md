@@ -245,9 +245,9 @@ Host:
 
 ```bash
 make -C slim/cpp host
-make -C slim/cpp test        # 94 + 54 + 51 + 64 = 263 checks in four binaries
+make -C slim/cpp test        # 101 + 54 + 51 + 64 = 270 checks in four binaries
 make -C slim/cpp tls         # host build with https:// (vendored mbedTLS)
-make -C slim/cpp tls-test    # the same 263 checks, TLS compiled in
+make -C slim/cpp tls-test    # the same 270 checks, TLS compiled in
 ./slim/cpp/slim-agent --help
 ```
 
@@ -276,6 +276,24 @@ build carried debug info and an `RPATH` pointing at the build machine's SDK path
 
 `-lgcc_eh` must come after the source files on the static link, otherwise the link fails
 with `undefined reference to _Unwind_Resume`.
+
+### On a Raspberry Pi 2 (armv7)
+
+Same sources, the board's own g++ - no cross toolchain, no musl (verified
+2026-10-16 on a Raspberry Pi 2 Model B, armv7l, glibc 2.41, 921 MiB RAM):
+
+```bash
+cd slim/cpp && make host     # 104 s -> ./slim-agent, 225,072 bytes
+make test                    # 270 checks (101 + 54 + 51 + 64)
+cd .. && python3 -m unittest discover -s . -p 'test_*.py'   # 117 tests
+./cpp/slim-agent --data-dir ~/slim-data --once '/history'    # no model needed
+```
+
+Mode B (model on the LAN): `--base-url http://<lan-host>:1234/v1` answers in
+3 s, provided the model is already loaded on that server. Mode A (model on the
+board): the Pi 2's `llama-server` on loopback with a 0.5B Q4 gives a turn in
+~50 s while the agent itself stays at 9.2 MiB peak RSS - on a board this slow
+the model, not the agent, is the cost.
 
 ## Deploy to the CPE, and what was verified there
 

@@ -120,3 +120,48 @@ Recompilar este árbol reproduce exactamente ese artefacto, así que compara el 
 Las tablas completas de verificación, los datos medidos en el dispositivo y los scripts de despliegue están
 en `slim/README.md` y `slim/deploy/`. La fila de asesores multimodelo se verificó el 2026-10-16 con
 `slim-agent-t830-static` `sha256 b965c79c03eb...` (OpenWrt 23.05.5, kernel 5.15.167).
+
+## Raspberry Pi 2 (armv7), en concreto
+
+Sin cadena de compilación cruzada y sin musl: el propio g++ de la placa compila
+las mismas fuentes. Verificado el 2026-10-16 en una Raspberry Pi 2 Model B
+(Raspberry Pi OS, armv7l, kernel 6.12, glibc 2.41, 921 MiB de RAM).
+
+```bash
+sudo apt install -y g++ make git          # solo si falta; RPi OS Lite no trae compilador
+git clone https://github.com/Matt0080828/new_agent.git
+cd new_agent/slim/cpp && make host        # 104 s -> ./slim-agent, 225.072 bytes
+make test                                 # 270 comprobaciones (101 + 54 + 51 + 64)
+cd .. && python3 -m unittest discover -s . -p 'test_*.py'   # 117 pruebas
+```
+
+Primero el agente sin modelo: `./slim-agent --help` y luego
+`./slim-agent --data-dir ~/slim-data --once '/history'`. El directorio de datos
+va en la tarjeta SD (`~/slim-data`), nunca en `/tmp`.
+
+Mode B: el modelo en la LAN, la Pi 2 responde en 3 s:
+
+```bash
+./slim-agent --base-url http://<host-en-la-lan>:1234/v1 --model qwen2.5-7b-instruct-1m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-OK'
+# PI2-OK
+```
+
+Carga el modelo en el servidor primero: un servidor que tiene que cargarlo bajo
+demanda devuelve un error HTTP en lugar de un turno.
+
+Mode A: el modelo en la placa (llama.cpp en loopback), ~50 s por turno con el
+agente en 9,2 MiB de RSS máximo:
+
+```bash
+# lo que ejecutaba la Pi 2 verificada (0.5B Q4):
+llama-server --models-preset ~/llama/models.ini --host 127.0.0.1 --port 8080 \
+  -c 8192 -t 4 -ctk q8_0 -ctv q8_0
+./slim-agent --base-url http://127.0.0.1:8080/v1 --model qwen2.5-0.5b-instruct-q4_k_m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-A-OK'
+# PI2-A-OK   (66 s con el modelo en frío, 50 s en caliente)
+```
+
+Un modelo de 0.5B es débil: no siempre sigue una instrucción simple (uno de los
+tres turnos medidos respondió con una llamada a herramienta), así que los comandos
+slash siguen siendo la forma determinista de accionar.

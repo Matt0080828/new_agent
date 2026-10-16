@@ -157,3 +157,48 @@ Those on-device results are the last verified run, from before the network-secur
 verified tables, the measured device facts, and the deploy scripts are in
 `slim/README.md` and `slim/deploy/`. The multi-model advisor row was verified 2026-10-16
 against `slim-agent-t830-static` `sha256 b965c79c03eb...` (OpenWrt 23.05.5, kernel 5.15.167).
+
+## Raspberry Pi 2 (armv7), concretely
+
+No cross toolchain and no musl: the board's own g++ builds the same sources.
+Verified 2026-10-16 on a Raspberry Pi 2 Model B (Raspberry Pi OS, armv7l,
+kernel 6.12, glibc 2.41, 921 MiB RAM).
+
+```bash
+sudo apt install -y g++ make git          # only if missing - RPi OS Lite has no compiler
+git clone https://github.com/Matt0080828/new_agent.git
+cd new_agent/slim/cpp && make host        # 104 s -> ./slim-agent, 225,072 bytes
+make test                                 # 270 checks (101 + 54 + 51 + 64)
+cd .. && python3 -m unittest discover -s . -p 'test_*.py'   # 117 tests
+```
+
+Bare agent first, no model needed: `./slim-agent --help`, then
+`./slim-agent --data-dir ~/slim-data --once '/history'`. Keep the data
+directory on the SD card (`~/slim-data`), never `/tmp`.
+
+Mode B - model on the LAN, the Pi 2 answers in 3 s:
+
+```bash
+./slim-agent --base-url http://<lan-host>:1234/v1 --model qwen2.5-7b-instruct-1m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-OK'
+# PI2-OK
+```
+
+Load the model on the server first: a server that has to load it on demand
+answers with an HTTP error instead of a turn.
+
+Mode A - model on the board (llama.cpp on loopback), ~50 s per turn with the
+agent at 9.2 MiB peak RSS:
+
+```bash
+# what the verified Pi 2 was running (0.5B Q4):
+llama-server --models-preset ~/llama/models.ini --host 127.0.0.1 --port 8080 \
+  -c 8192 -t 4 -ctk q8_0 -ctv q8_0
+./slim-agent --base-url http://127.0.0.1:8080/v1 --model qwen2.5-0.5b-instruct-q4_k_m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-A-OK'
+# PI2-A-OK   (66 s with a cold model, 50 s warm)
+```
+
+A 0.5B model is weak - it does not always follow a plain instruction (one of the
+three measured turns answered with a tool call instead), so the slash commands
+stay the deterministic way to drive actions.

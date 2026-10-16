@@ -121,3 +121,48 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 ください。検証表の全文、実測した端末の事実、配備スクリプトは `slim/README.md` と
 `slim/deploy/` にあります。マルチモデル・アドバイザーの行は 2026-10-16 に
 `slim-agent-t830-static` `sha256 b965c79c03eb...`（OpenWrt 23.05.5、kernel 5.15.167）で実測。
+
+## Raspberry Pi 2（armv7）の具体的な手順
+
+クロスツールチェーンも musl も不要です。ボード自身の g++ が同じソースを
+ビルドします。2026-10-16 に Raspberry Pi 2 Model B で実測（Raspberry Pi OS、
+armv7l、kernel 6.12、glibc 2.41、921 MiB RAM）。
+
+```bash
+sudo apt install -y g++ make git          # 無い場合のみ。RPi OS Lite にはコンパイラが入っていません
+git clone https://github.com/Matt0080828/new_agent.git
+cd new_agent/slim/cpp && make host        # 104 秒 -> ./slim-agent、225,072 bytes
+make test                                 # 270 チェック（101 + 54 + 51 + 64）
+cd .. && python3 -m unittest discover -s . -p 'test_*.py'   # 117 テスト
+```
+
+まずモデル不要の素の agent：`./slim-agent --help`、続いて
+`./slim-agent --data-dir ~/slim-data --once '/history'`。データディレクトリは
+SD カード上（`~/slim-data`）に置き、`/tmp` には置かないでください。
+
+Mode B —— モデルは LAN 上、Pi 2 は 1 ターン 3 秒：
+
+```bash
+./slim-agent --base-url http://<LAN上のホスト>:1234/v1 --model qwen2.5-7b-instruct-1m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-OK'
+# PI2-OK
+```
+
+モデルは**サーバー側で先にロード**しておいてください。必要時にロードする
+サーバーは HTTP エラーを返し、ターンにはなりません。
+
+Mode A —— モデルはボード上（llama.cpp を loopback で）、1 ターン約 50 秒、
+agent のピーク RSS は 9.2 MiB：
+
+```bash
+# 実測した Pi 2 が動かしていた行（0.5B Q4）：
+llama-server --models-preset ~/llama/models.ini --host 127.0.0.1 --port 8080 \
+  -c 8192 -t 4 -ctk q8_0 -ctv q8_0
+./slim-agent --base-url http://127.0.0.1:8080/v1 --model qwen2.5-0.5b-instruct-q4_k_m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-A-OK'
+# PI2-A-OK   （モデルがコールドで 66 秒、ウォームで 50 秒）
+```
+
+0.5B のモデルは弱く、素直な指示に従わないことがあります（実測 3 ターンのうち
+1 回は tool call を返しました）。そのため、動作を確実に駆動するのは slash
+コマンドです。

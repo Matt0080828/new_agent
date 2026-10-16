@@ -128,3 +128,45 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 重新建置這棵樹會產生與上面**完全相同**的 artifact，所以部署前請比對 sha256。完整的驗證表格、
 裝置實測數據與部署腳本都在 `slim/README.md` 與 `slim/deploy/`。多模型顧問那一列為 2026-10-16
 以 `slim-agent-t830-static` `sha256 b965c79c03eb...`（OpenWrt 23.05.5, kernel 5.15.167）實測。
+
+## Raspberry Pi 2（armv7）實作步驟
+
+不需要跨編譯工具鏈、也不需要 musl：用板子自己的 g++ 就能編同一份原始碼。
+2026-10-16 在 Raspberry Pi 2 Model B 實測（Raspberry Pi OS、armv7l、kernel 6.12、
+glibc 2.41、921 MiB RAM）。
+
+```bash
+sudo apt install -y g++ make git          # 只有在缺的時候才要——RPi OS Lite 預設沒有編譯器
+git clone https://github.com/Matt0080828/new_agent.git
+cd new_agent/slim/cpp && make host        # 104 秒 -> ./slim-agent，225,072 bytes
+make test                                 # 270 個檢查（101 + 54 + 51 + 64）
+cd .. && python3 -m unittest discover -s . -p 'test_*.py'   # 117 個測試
+```
+
+先跑不需要模型的裸 agent：`./slim-agent --help`，然後
+`./slim-agent --data-dir ~/slim-data --once '/history'`。資料目錄放 SD 卡
+（`~/slim-data`），**不要**放 `/tmp`。
+
+Mode B —— 模型在 LAN 上，Pi 2 單回合 3 秒：
+
+```bash
+./slim-agent --base-url http://<LAN主機>:1234/v1 --model qwen2.5-7b-instruct-1m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-OK'
+# PI2-OK
+```
+
+模型要**先在伺服器端載好**：需要臨時載入的伺服器會回 HTTP 錯誤，不會給你一個回合。
+
+Mode A —— 模型跑在板上（llama.cpp 走 loopback），單回合約 50 秒，agent 峰值 RSS 9.2 MiB：
+
+```bash
+# 實測那台 Pi 2 當時跑的就是這行（0.5B Q4）：
+llama-server --models-preset ~/llama/models.ini --host 127.0.0.1 --port 8080 \
+  -c 8192 -t 4 -ctk q8_0 -ctv q8_0
+./slim-agent --base-url http://127.0.0.1:8080/v1 --model qwen2.5-0.5b-instruct-q4_k_m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-A-OK'
+# PI2-A-OK   （冷啟動 66 秒、暖機 50 秒）
+```
+
+0.5B 的模型很弱，不一定照指示回答（實測三回合裡有一次直接回 tool call），
+所以 slash 指令仍是驅動動作的確定性路徑。

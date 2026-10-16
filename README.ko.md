@@ -118,3 +118,47 @@ server가 요구하는 것은 `libstdc++.so.6`, `libgcc_s.so.1`, musl `libc`뿐�
 검증 표 전체, 기기 실측 사실, 배포 스크립트는 `slim/README.md`와 `slim/deploy/`에 있습니다.
 멀티 모델 어드바이저 행은 2026-10-16에 `slim-agent-t830-static` `sha256 b965c79c03eb...`
 (OpenWrt 23.05.5, kernel 5.15.167)로 실측했습니다.
+
+## Raspberry Pi 2(armv7) 구체적인 절차
+
+크로스 툴체인도 musl도 필요 없습니다. 보드 자체의 g++가 같은 소스를 빌드합니다.
+2026-10-16에 Raspberry Pi 2 Model B에서 실측(Raspberry Pi OS, armv7l,
+kernel 6.12, glibc 2.41, 921 MiB RAM).
+
+```bash
+sudo apt install -y g++ make git          # 없을 때만 - RPi OS Lite에는 컴파일러가 없습니다
+git clone https://github.com/Matt0080828/new_agent.git
+cd new_agent/slim/cpp && make host        # 104초 -> ./slim-agent, 225,072 bytes
+make test                                 # 270개 검사(101 + 54 + 51 + 64)
+cd .. && python3 -m unittest discover -s . -p 'test_*.py'   # 117개 테스트
+```
+
+모델이 필요 없는 상태로 먼저: `./slim-agent --help`, 그다음
+`./slim-agent --data-dir ~/slim-data --once '/history'`. 데이터 디렉터리는
+SD 카드(`~/slim-data`)에 두고 `/tmp`에는 두지 마세요.
+
+Mode B —— 모델은 LAN에, Pi 2는 턴당 3초:
+
+```bash
+./slim-agent --base-url http://<LAN호스트>:1234/v1 --model qwen2.5-7b-instruct-1m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-OK'
+# PI2-OK
+```
+
+모델은 **서버에서 먼저 로드**해 두세요. 필요할 때 로드하는 서버는 턴 대신
+HTTP 오류를 돌려줍니다.
+
+Mode A —— 모델이 보드에서 실행(loopback의 llama.cpp), 턴당 약 50초,
+agent 최대 RSS 9.2 MiB:
+
+```bash
+# 실측한 Pi 2가 실행하던 줄(0.5B Q4):
+llama-server --models-preset ~/llama/models.ini --host 127.0.0.1 --port 8080 \
+  -c 8192 -t 4 -ctk q8_0 -ctv q8_0
+./slim-agent --base-url http://127.0.0.1:8080/v1 --model qwen2.5-0.5b-instruct-q4_k_m \
+  --data-dir ~/slim-data --non-interactive --once 'Reply with exactly: PI2-A-OK'
+# PI2-A-OK   (모델이 콜드면 66초, 워밍 후 50초)
+```
+
+0.5B 모델은 약해서 평범한 지시를 항상 따르지 않습니다(실측 3턴 중 1턴은 tool call을
+반환했습니다). 그래서 동작을 확실히 구동하는 방법은 slash 명령입니다.
