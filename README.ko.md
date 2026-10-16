@@ -112,6 +112,7 @@ server가 요구하는 것은 `libstdc++.so.6`, `libgcc_s.so.1`, musl `libc`뿐�
 | session 저장소 | `sessions/<name>.jsonl`, 모드 `0600`, 한 줄에 JSON 객체 하나 |
 | RAG 코퍼스, 재빌드 불필요 | `docs/`와 `skills/`에 넣은 markdown은 라이브로 검색됨: `/rag mt753x`, 다중 단어인 `/rag probe -22`, `/rag HotSpotFlag`, `/rag OWE` 모두 올바른 파일을 첫 번째로 반환 (2026-09-22) |
 | 모델 실패(HTTP 400) | `HTTP status 400: <서버 메시지>`를 보고하고 session 파일을 쓰지 않음 |
+| **Raspberry Pi 2 (armv7l, 2026-10-16)** | 보드 자체의 g++ 14.2.0으로 네이티브 빌드: 225,072 bytes, C++ 검사 270/270 + Python 테스트 117개 모두 통과. Mode B(모델이 LAN에 있음)는 턴당 3초. Mode A(loopback `llama-server`, Qwen2.5-0.5B-Instruct-Q4_K_M)는 턴당 약 50초, agent 최대 RSS 9.2 MiB |
 
 이 트리를 다시 빌드하면 위와 **동일한** artifact가 나옵니다. 배포 전에 sha256을 비교하세요.
 검증 표 전체, 기기 실측 사실, 배포 스크립트는 `slim/README.md`와 `slim/deploy/`에 있습니다.

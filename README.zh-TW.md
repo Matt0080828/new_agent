@@ -123,6 +123,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 | session 儲存 | `sessions/<name>.jsonl`、權限 `0600`、一行一個 JSON 物件 |
 | RAG 語料，不需重 build | 放進 `docs/` 與 `skills/` 的 markdown 會被即時搜到：`/rag mt753x`、多詞的 `/rag probe -22`、`/rag HotSpotFlag` 與 `/rag OWE` 都把對的檔案排在第一（2026-09-22） |
 | 模型失敗（HTTP 400） | 回報 `HTTP status 400: <伺服器訊息>`，且不寫入 session 檔 |
+| **Raspberry Pi 2（armv7l，2026-10-16）** | 用板子自己的 g++ 14.2.0 原生編譯：225,072 bytes、270/270 個 C++ 檢查 ＋ 117 個 Python 測試全過；Mode B（模型在 LAN）單回合 3 秒；Mode A（loopback `llama-server`，Qwen2.5-0.5B-Instruct-Q4_K_M）單回合約 50 秒，agent 峰值 RSS 9.2 MiB |
 
 重新建置這棵樹會產生與上面**完全相同**的 artifact，所以部署前請比對 sha256。完整的驗證表格、
 裝置實測數據與部署腳本都在 `slim/README.md` 與 `slim/deploy/`。多模型顧問那一列為 2026-10-16

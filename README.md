@@ -149,6 +149,7 @@ numbers, and the caveats.
 | session store | `sessions/<name>.jsonl`, mode `0600`, one JSON object per line |
 | RAG corpus, no rebuild | markdown dropped into `docs/` and `skills/` is searched live: `/rag mt753x`, the multi-word `/rag probe -22`, `/rag HotSpotFlag` and `/rag OWE` each returned the right file first (2026-09-22) |
 | failing model (HTTP 400) | reports `HTTP status 400: <server message>` and writes no session file |
+| **Raspberry Pi 2 (armv7l, 2026-10-16)** | native `make host` with the board's g++ 14.2.0: 225,072 bytes, 270/270 C++ checks + 117 Python tests; Mode B turn in 3 s over the LAN; Mode A on the loopback `llama-server` (Qwen2.5-0.5B-Instruct-Q4_K_M): ~50 s/turn, agent peak RSS 9.2 MiB |
 
 Those on-device results are the last verified run, from before the network-security work
 (P1-P4 + TLS). The current tree rebuilds to `sha256 b965c79c...` (non-TLS) /

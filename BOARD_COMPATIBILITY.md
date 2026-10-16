@@ -67,6 +67,15 @@ endpoint).
   transcripts).
 - **x86_64 host** - full test suite plus smoke runs; the C++ build is plain
   `g++ -O2 -std=c++11` with POSIX sockets and nothing else.
+- **Raspberry Pi 2 Model B** - Raspbian (armv7l, kernel 6.12,
+  glibc 2.41), g++ 14.2.0, 921 MiB RAM, SD-card root. Builds natively with the
+  board's own compiler (no cross toolchain): `make -C slim/cpp host` -> 225,072
+  bytes in 104 s, 270/270 C++ checks and 117 Python tests green, `slim-agent
+  --help` and the slash turns unaffected (2026-10-16). Mode B (model on the LAN,
+  LM Studio): a turn in 3 s. Mode A (model on the board: `llama-server` on
+  loopback, Qwen2.5-0.5B-Instruct-Q4_K_M, `-c 8192 -t 4`): a turn in 50 s with the
+  agent at 9.2 MiB peak RSS - the Pi2's place in the Mode A table is the 270M-0.5B
+  row, at the slow end of it.
 
 ## Architectures
 
@@ -74,7 +83,7 @@ endpoint).
 | --- | --- | --- |
 | aarch64 | **verified** | the reference CPE; any ARM64 Linux is in the same class |
 | x86_64 | **verified** | host build and tests |
-| armv7 (32-bit) | untested, expected to build | the sources are plain POSIX C++11 with no architecture-specific code; bring an armv7 toolchain (`CXX=... make`) - RPi 1/2 and MT7621-class routers are the usual targets |
+| armv7 (32-bit) | **verified** | Raspberry Pi 2 Model B (armv7l, glibc 2.41, g++ 14.2.0): the sources build natively - `make -C slim/cpp host` in 104 s gives a 225,072-byte armv7 ELF, and all 270 C++ checks plus the 117 Python tests pass (2026-10-16). No cross toolchain needed; RPi 1 and MT7621-class routers are the same class |
 | mips / RISC-V | untested | same expectation, no guarantee |
 | non-Linux | macOS works as a host; Windows and ESP32-class targets are not supported | POSIX sockets, `sys/stat.h`, and a real Python 3 for the Python client |
 

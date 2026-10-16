@@ -115,6 +115,7 @@ cd /data/slim && nohup ./llama-server -m models/qwen2.5-0.5b-instruct-q4_k_m.ggu
 | session ストア | `sessions/<name>.jsonl`、モード `0600`、1 行 1 JSON オブジェクト |
 | RAG コーパス、再ビルド不要 | `docs/` と `skills/` に置いた markdown はそのまま検索対象になる: `/rag mt753x`、複数語の `/rag probe -22`、`/rag HotSpotFlag`、`/rag OWE` いずれも正しいファイルを先頭で返した（2026-09-22） |
 | モデル失敗（HTTP 400） | `HTTP status 400: <サーバーのメッセージ>` を報告し、session ファイルを書きません |
+| **Raspberry Pi 2（armv7l、2026-10-16）** | ボード自身の g++ 14.2.0 でネイティブビルド：225,072 bytes、C++ チェック 270/270 ＋ Python テスト 117 件すべて成功。Mode B（モデルは LAN）は 1 ターン 3 秒。Mode A（loopback の `llama-server`、Qwen2.5-0.5B-Instruct-Q4_K_M）は 1 ターン約 50 秒、agent のピーク RSS は 9.2 MiB |
 
 このツリーを再ビルドすると上記と**同一の** artifact が得られます。配備前に sha256 を照合して
 ください。検証表の全文、実測した端末の事実、配備スクリプトは `slim/README.md` と

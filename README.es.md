@@ -114,6 +114,7 @@ determinista de dirigir acciones. Ambos pueden convivir por invocación, y `--fa
 | almacén de sesiones | `sessions/<name>.jsonl`, modo `0600`, un objeto JSON por línea |
 | corpus RAG, sin reconstruir | los markdown colocados en `docs/` y `skills/` se buscan en vivo: `/rag mt753x`, la consulta de varias palabras `/rag probe -22`, `/rag HotSpotFlag` y `/rag OWE` devolvieron el archivo correcto primero (2026-09-22) |
 | modelo que falla (HTTP 400) | informa `HTTP status 400: <mensaje del servidor>` y no escribe archivo de sesión |
+| **Raspberry Pi 2 (armv7l, 2026-10-16)** | compilación nativa con el g++ 14.2.0 de la placa: 225.072 bytes, 270/270 comprobaciones de C++ + 117 pruebas de Python; turno de Mode B en 3 s por la LAN; Mode A en el `llama-server` de loopback (Qwen2.5-0.5B-Instruct-Q4_K_M): ~50 s por turno, RSS máximo del agente 9,2 MiB |
 
 Recompilar este árbol reproduce exactamente ese artefacto, así que compara el sha256 antes de desplegar.
 Las tablas completas de verificación, los datos medidos en el dispositivo y los scripts de despliegue están
